@@ -136,12 +136,78 @@ process calculateMissingness {
     '''
 }
 
+process filterRelated {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 4
+
+    input:
+    path vcf
+
+    output:
+    path 'RelatednessCheck.bed', emit: bedFile
+    path 'RelatednessCheck.bim', emit: bimFile
+    path 'RelatednessCheck.fam', emit: famFile
+    path 'related.kin0'
+    path 'RelatednessPassedSamples.txt'
+
+    script:
+    """
+    # 1. Do relatedness check
+    ~/plink2 --vcf ${plinkData} \
+        --make-king-table \
+        --king-table-filter ${params.kingTableFilter} \
+        --out related \
+        --threads 4 \
+
+    # 2. Create sample list of non-related samples
+    Rscript find_related_samples.R --kin_file related.kin0 --target_bed ${bedFile}
+
+    # 3. Remove samples that are not on the list created above
+    ~/plink2 --bed ${bedFile} \
+        --bim ${bimFile} \
+        --fam ${famFile} \
+        --keep RelatednessPassedSamples.txt \
+        --make-bed \
+        --out RelatednessCheck
+    """
+}
+
+process popProject {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 4
+
+    input:
+    path vcf
+    
+    output:
+    path '*.png'
+    path '*.pdf'
+    path '1000G_PC_projections.txt'
+    path 'PopAssignResults.txt'
+    
+    script:
+    """
+    Rscript project_samples_to_superpop.R --ref_bed ${params.refPath}.bed \
+        --target_bed ${bedFile} --ref_pop ${params.refPop}
+    """
+}
+
 workflow {
     concatCHRFiles()
     splitMultiAllelicVariants()
     filterVariants()
     convertToPlinkFormat()
-    calculateMissingness() // also show hwe / freq / etc ?
+    calculateMissingness() 
+    popProject()
+    // also show hwe / freq / etc ?
     // remove variants if sample has missigness >0.25
     // remove high heterozygosity samples (+/- 3 SD from the mean)
     // identity by state (IBS)
