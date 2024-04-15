@@ -24,9 +24,9 @@ def main(input_file, output_folder):
     plt.hist(het["Het_Rate"], color="#000000", alpha=0.5, bins=20, edgecolor='black')
 
     # Add vertical lines for mean and ±3 standard deviations
-    plt.axvline(mean_het_rate, color='red', linestyle='--', label='Mean Het Rate')
+    plt.axvline(mean_het_rate, color='blue', linestyle='--', label='Mean Het Rate')
     plt.axvline(mean_het_rate + 3 * std_dev_het_rate, color='red', linestyle='--', label='Mean + 3*SD')
-    plt.axvline(mean_het_rate - 3 * std_dev_het_rate, color='red', linestyle='--', label='Mean - 3*SD')
+    plt.axvline(mean_het_rate - 3 * std_dev_het_rate, color='green', linestyle='--', label='Mean - 3*SD')
 
     # Set labels and title
     plt.xlabel("Heterozygosity rate")
