@@ -1,15 +1,14 @@
 """
 File:         main.nf
 Created:      2024/04/11
-Last Changed: 2024/04/11
-Author:       Peter Riesebos
+Last Changed: 2024/04/15
+Author:       Peter Riesebos & Orfeas Gkourlias
 """
 
 nextflow.enable.dsl=2
 
 
 process concatCHRFiles {
-    publishDir "${params.out_dir}", mode: 'move'
     errorStrategy 'retry'
     maxRetries 1
 
@@ -34,7 +33,6 @@ process concatCHRFiles {
 }
 
 process splitMultiAllelicVariants {
-    publishDir "${params.out_dir}", mode: 'move'
     errorStrategy 'retry'
     maxRetries 1
 
@@ -116,7 +114,6 @@ process convertToPlinkFormat {
 }
 
 process calculateMissingness {
-    publishDir "${params.out_dir}", mode: 'move'
     errorStrategy 'retry'
     maxRetries 1
 
@@ -133,6 +130,82 @@ process calculateMissingness {
     script:
     '''
     plink2 --bfile ${plinkData} --missing
+    '''
+}
+
+// Create a txt file with samples where missingness => 50%
+// Filter these samples. Output -> filtered plink files
+process filterMissingSamples {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    file smiss from inputSmissFile
+    file data from inputDataFile
+
+    output:
+    file 'filtered_samples.txt' into filteredSamplesFile
+    file 'data_keep.bed' into bedFile
+    file 'data_keep.bim' into bimFile
+    file 'data_keep.fam' into famFile
+
+    script:
+    """
+    python filter_samples.py ${smiss} filtered_samples.txt --threshold 0.5
+    plink2 --bfile ${data} --keep filtered_samples.txt --make-bed --out data_keep
+    """
+}
+
+process createHetFile {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path smiss
+
+    output:
+    path plinkData
+
+    script:
+    '''
+    plink --bfile your_data --het cols=hom,het,nobs,f --out heterozygosity_output
+    '''
+}
+
+process filterHetFile {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    file het_file
+    path plinkData
+    file failed_samples_txt from upstream
+
+    output:
+    file "*.png"
+    file "*Failed.txt"
+    file "*FailedSamplesOnly.txt"
+    path plinkData
+
+    script:
+    '''
+    python3 heterozygosityCheck.py ${het_file} ${output}
+    plink2 --bfile ${plinkData}/input_data \
+       --remove ${failed_samples_txt} \
+       --make-bed \
+       --out ${plinkData}/filtered_output
     '''
 }
 
@@ -203,8 +276,10 @@ process popProject {
 workflow {
     concatCHRFiles()
     splitMultiAllelicVariants()
-    filterVariants()
+    filterVariants() // Save output?
     convertToPlinkFormat()
+    filterMissingSamples() // default threshold of 50%
+    createHetFile()
     calculateMissingness() 
     popProject()
     // also show hwe / freq / etc ?
@@ -212,4 +287,6 @@ workflow {
     // remove high heterozygosity samples (+/- 3 SD from the mean)
     // identity by state (IBS)
     // Bigsnpr (map sample genotypes PCs against 1000G to assign likely ancestry), wat moet hier nog mee gebeuren? Alleen EUR / alleen super-pop?
+
+    // Add plots between steps!
 }
