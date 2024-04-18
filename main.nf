@@ -9,6 +9,7 @@ nextflow.enable.dsl=2
 
 
 process concatCHRFiles {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -16,23 +17,22 @@ process concatCHRFiles {
     memory '8 GB'
     cpus 1
 
-    // Parameterize the chromosome range
-    int chrom_start = 1
-    int chrom_end = 22
-
     input:
-    path chr_files from Channel.fromPath(params.input_dir).filter { file -> file.name.endsWith('.vcf.gz') }
+    path vcfFilesPath
 
     output:
-    path "${params.out_dir}/merged_output.vcf.gz" into merged_output
+    path "merged_output.vcf.gz"
+    path "sorted_merged_output.vcf.gz", emit: sortedVCF
 
     script:
-    '''
-    bcftools concat $(printf "${chr_files} ") -Oz -o ${params.out_dir}/merged_output.vcf.gz
-    '''
+    """
+    bcftools concat ${vcfFilesPath}/*.vcf.gz -Oz -o merged_output.vcf.gz
+    bcftools sort merged_output.vcf.gz -Oz -o sorted_merged_output.vcf.gz
+    """
 }
 
 process splitMultiAllelicVariants {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -41,20 +41,62 @@ process splitMultiAllelicVariants {
     cpus 1
 
     input:
-    path filteredVcfFile
+    path vcfFilesPath
 
     output:
-    path "${filteredVcfFile.SimpleName}.vcf.gz"
+    path "split_sorted_merged_output.vcf.gz"
 
     script:
-    '''
-    bcftools norm -m -any -o norm_${filteredVcfFile.SimpleName}.vcf.gz -Oz ${filteredVcfFile}
-    '''
+    """
+    bcftools norm -m -any ${vcfFilesPath} -Oz -o ${params.inputDir}/split_sorted_merged_output.vcf.gz
+    """
+}
+
+process filterMultiAllelicVariants {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path vcfFilesPath
+
+    output:
+    path "no_multi_allelic.vcf.gz"
+
+    script:
+    """
+    bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o ${params.inputDir}/no_multi_allelic.vcf.gz
+    """
+}
+
+process fixGTAnnot {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path vcfFilesPath
+
+    output:
+    path "no_multi_allelic_dotrevive.vcf.gz"
+
+    script:
+    """
+    python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o ${params.inputDir}/no_multi_allelic_dotrevive.vcf.gz
+    """
 }
 
 
 process filterVariants {
-    publishDir "${params.out_dir}", mode: 'move'
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -66,13 +108,13 @@ process filterVariants {
     path vcfFile
 
     output:
-    path "*-filtered.vcf.gz", emit: filteredVcfFile
-    path "*.log"
+    path "no_multi_allelic_dotrevive-filtered.vcf.gz", emit: filteredVCF
+    path "no_multi_allelic_dotrevive-filtered.log.gz"
 
-    shell:
-    '''
+    script:
+    """
     # 1. Define command arguments
-    commandArguments="--input !{vcfFile} \
+    commandArguments="--input ${vcfFile} \
     --output no_multi_allelic \
     --call_rate 0.5 \
     --filtered_depth 5 \
@@ -82,16 +124,17 @@ process filterVariants {
     --no_indel_vqsr_check \
     --remove_non_pass_snv \
     --remove_non_pass_indel \
-    --replace_poor_quality_genotypes
+    --replace_poor_quality_genotypes \
+    --output ${params.inputDir}/no_multi_allelic_dotrevive"
 
     # 2. Run the custom VCF filter script
-    python3 custom_vcf_filter.py ${commandArguments} \
+    python3 ${projectDir}/bin/custom_vcf_filter.py \${commandArguments} \
     | tee custom_vcf_filter.log
-    '''
+    """
 }
 
 process convertToPlinkFormat {
-    publishDir "${params.out_dir}", mode: 'move'
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -105,12 +148,12 @@ process convertToPlinkFormat {
     output:
     path "*.bed"
     path "*.bim"
-    path "*.bam"
+    path "*.fam"
 
     script:
-    '''
+    """
     plink2 --vcf ${vcfFile} --make-bed
-    '''
+    """
 }
 
 process calculateMissingness {
@@ -148,10 +191,10 @@ process filterMissingSamples {
     file data from inputDataFile
 
     output:
-    file 'filtered_samples.txt' into filteredSamplesFile
-    file 'data_keep.bed' into bedFile
-    file 'data_keep.bim' into bimFile
-    file 'data_keep.fam' into famFile
+    path 'filtered_samples.txt' into filteredSamplesFile
+    path 'data_keep.bed' into bedFile
+    path 'data_keep.bim' into bimFile
+    path 'data_keep.fam' into famFile
 
     script:
     """
@@ -274,17 +317,19 @@ process popProject {
 }
 
 workflow {
-    concatCHRFiles()
-    splitMultiAllelicVariants()
-    filterVariants() // Save output?
-    convertToPlinkFormat()
-    filterMissingSamples() // default threshold of 50%
-    createHetFile()
-    calculateMissingness() 
-    popProject()
-    // also show hwe / freq / etc ?
-    // remove variants if sample has missigness >0.25
+    concatCHRFiles(params.inputDir)
+    splitMultiAllelicVariants(concatCHRFiles.output.sortedVCF)
+    filterMultiAllelicVariants(splitMultiAllelicVariants.output)
+    fixGTAnnot(filterMultiAllelicVariants.output)
+    filterVariants(fixGTAnnot.output)
+    convertToPlinkFormat(filterVariants.output.filteredVCF)
+    // calculateMissingness() 
+    // filterMissingSamples() // default threshold of 50%
+    // verwijder samples met < 10% non-ref calls (dit kan wel variabel zijn per dataset)
+    // createHetFile()
     // remove high heterozygosity samples (+/- 3 SD from the mean)
+    // popProject()
+    // also show hwe / freq / etc ?
     // identity by state (IBS)
     // Bigsnpr (map sample genotypes PCs against 1000G to assign likely ancestry), wat moet hier nog mee gebeuren? Alleen EUR / alleen super-pop?
 

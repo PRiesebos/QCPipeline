@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 import argparse
 
 def get_samples_with_low_missing_rate(file_path, threshold):
