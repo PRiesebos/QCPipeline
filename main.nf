@@ -1,7 +1,7 @@
 """
 File:         main.nf
 Created:      2024/04/11
-Last Changed: 2024/04/15
+Last Changed: 2024/04/18
 Author:       Peter Riesebos & Orfeas Gkourlias
 """
 
@@ -9,6 +9,7 @@ nextflow.enable.dsl=2
 
 
 process concatCHRFiles {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -16,23 +17,22 @@ process concatCHRFiles {
     memory '8 GB'
     cpus 1
 
-    // Parameterize the chromosome range
-    int chrom_start = 1
-    int chrom_end = 22
-
     input:
-    path chr_files from Channel.fromPath(params.input_dir).filter { file -> file.name.endsWith('.vcf.gz') }
+    path vcfFilesPath
 
     output:
-    path "${params.out_dir}/merged_output.vcf.gz" into merged_output
+    path "merged_output.vcf.gz"
+    path "sorted_merged_output.vcf.gz", emit: sortedVCF
 
     script:
-    '''
-    bcftools concat $(printf "${chr_files} ") -Oz -o ${params.out_dir}/merged_output.vcf.gz
-    '''
+    """
+    bcftools concat ${vcfFilesPath}/*.vcf.gz -Oz -o merged_output.vcf.gz
+    bcftools sort merged_output.vcf.gz -Oz -o sorted_merged_output.vcf.gz
+    """
 }
 
 process splitMultiAllelicVariants {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -41,20 +41,62 @@ process splitMultiAllelicVariants {
     cpus 1
 
     input:
-    path filteredVcfFile
+    path vcfFilesPath
 
     output:
-    path "${filteredVcfFile.SimpleName}.vcf.gz"
+    path "split_sorted_merged_output.vcf.gz"
 
     script:
-    '''
-    bcftools norm -m -any -o norm_${filteredVcfFile.SimpleName}.vcf.gz -Oz ${filteredVcfFile}
-    '''
+    """
+    bcftools norm -m -any ${vcfFilesPath} -Oz -o ${params.inputDir}/split_sorted_merged_output.vcf.gz
+    """
+}
+
+process filterMultiAllelicVariants {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path vcfFilesPath
+
+    output:
+    path "no_multi_allelic.vcf.gz"
+
+    script:
+    """
+    bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o ${params.inputDir}/no_multi_allelic.vcf.gz
+    """
+}
+
+process fixGTAnnot {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path vcfFilesPath
+
+    output:
+    path "no_multi_allelic_dotrevive.vcf.gz"
+
+    script:
+    """
+    python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o ${params.inputDir}/no_multi_allelic_dotrevive.vcf.gz
+    """
 }
 
 
 process filterVariants {
-    publishDir "${params.out_dir}", mode: 'move'
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -66,13 +108,13 @@ process filterVariants {
     path vcfFile
 
     output:
-    path "*-filtered.vcf.gz", emit: filteredVcfFile
-    path "*.log"
+    path "no_multi_allelic_dotrevive-filtered.vcf.gz", emit: filteredVCF
+    path "no_multi_allelic_dotrevive-filtered.log.gz"
 
-    shell:
-    '''
+    script:
+    """
     # 1. Define command arguments
-    commandArguments="--input !{vcfFile} \
+    commandArguments="--input ${vcfFile} \
     --output no_multi_allelic \
     --call_rate 0.5 \
     --filtered_depth 5 \
@@ -82,16 +124,17 @@ process filterVariants {
     --no_indel_vqsr_check \
     --remove_non_pass_snv \
     --remove_non_pass_indel \
-    --replace_poor_quality_genotypes
+    --replace_poor_quality_genotypes \
+    --output ${params.inputDir}/no_multi_allelic_dotrevive"
 
     # 2. Run the custom VCF filter script
-    python3 custom_vcf_filter.py ${commandArguments} \
-    | tee custom_vcf_filter.log
-    '''
+    python3 ${projectDir}/bin/custom_vcf_filter.py \${commandArguments} \
+    | tee ${params.inputDir}/custom_vcf_filter.log
+    """
 }
 
 process convertToPlinkFormat {
-    publishDir "${params.out_dir}", mode: 'move'
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -103,17 +146,18 @@ process convertToPlinkFormat {
     path vcfFile
 
     output:
-    path "*.bed"
-    path "*.bim"
-    path "*.bam"
+    path "*.bed", emit: bedFile
+    path "*.bim", emit: bimFile
+    path "*.fam", emit: famFile
 
     script:
-    '''
+    """
     plink2 --vcf ${vcfFile} --make-bed
-    '''
+    """
 }
 
 process calculateMissingness {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -122,45 +166,46 @@ process calculateMissingness {
     cpus 1
 
     input:
-    path plinkData
+    path bedFile
+    path bimFile
+    path famFile
 
     output:
-    path "*.imiss"
+    path "*.smiss"
 
     script:
-    '''
-    plink2 --bfile ${plinkData} --missing
-    '''
+    """
+    plink2 --bfile plink2 --missing --out missing_output
+    """
+}
+
+// if less than 50 samples use --bad-freqs. Needs an alternative solution?
+process createHetFile {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path bedFile
+    path bimFile
+    path famFile
+
+    output:
+    path "*.het"
+
+    script:
+    """
+    plink2 --bfile plink2 --het cols=hom,het,nobs,f --bad-freqs --out heterozygosity_output
+    """
 }
 
 // Create a txt file with samples where missingness => 50%
-// Filter these samples. Output -> filtered plink files
-process filterMissingSamples {
-    errorStrategy 'retry'
-    maxRetries 1
-
-    time '4h'
-    memory '8 GB'
-    cpus 1
-
-    input:
-    file smiss from inputSmissFile
-    file data from inputDataFile
-
-    output:
-    file 'filtered_samples.txt' into filteredSamplesFile
-    file 'data_keep.bed' into bedFile
-    file 'data_keep.bim' into bimFile
-    file 'data_keep.fam' into famFile
-
-    script:
-    """
-    python filter_samples.py ${smiss} filtered_samples.txt --threshold 0.5
-    plink2 --bfile ${data} --keep filtered_samples.txt --make-bed --out data_keep
-    """
-}
-
-process createHetFile {
+process findMissingSamples {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -172,15 +217,17 @@ process createHetFile {
     path smiss
 
     output:
-    path plinkData
+    path 'filtered_samples.txt', emit: filteredSamplesFile
 
     script:
-    '''
-    plink --bfile your_data --het cols=hom,het,nobs,f --out heterozygosity_output
-    '''
+    """
+    python ${projectDir}/bin/filterMissingness.py ${smiss} ${params.inputDir}/filtered_samples.txt --threshold 0.5
+    """
 }
 
-process filterHetFile {
+// Filter these samples. Output -> filtered plink files
+process filterMissingSamples {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -189,24 +236,72 @@ process filterHetFile {
     cpus 1
 
     input:
-    file het_file
-    path plinkData
-    file failed_samples_txt from upstream
+    path filteredSamplesFile
+    path bedFile
+    path bimFile
+    path famFile
 
     output:
-    file "*.png"
-    file "*Failed.txt"
-    file "*FailedSamplesOnly.txt"
-    path plinkData
+    path 'data_keep.bed', emit: bedFile
+    path 'data_keep.bim', emit: bimFile
+    path 'data_keep.fam', emit: famFile
 
     script:
-    '''
-    python3 heterozygosityCheck.py ${het_file} ${output}
-    plink2 --bfile ${plinkData}/input_data \
-       --remove ${failed_samples_txt} \
+    """
+    plink2 --bfile plink2 --keep ${filteredSamplesFile} --make-bed --out data_keep
+    """
+}
+
+process findHetSamples {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path het_file
+
+    output:
+    path "*.png"
+    path "*Failed.txt"
+    path "*FailedSamplesOnly.txt", emit: failedHetSamples
+
+    script:
+    """
+    python3 ${projectDir}/bin/heterozygosityCheck.py ${het_file} ${params.inputDir}
+    """
+}
+
+process filterHetSamples {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path failedHetSamples
+    path bedFile
+    path bimFile
+    path famFile
+
+    output:
+    path 'data_keep_het.bed', emit: bedFile
+    path 'data_keep_het.bim', emit: bimFile
+    path 'data_keep_het.fam', emit: famFile
+
+    script:
+    """
+    plink2 --bfile data_keep \
+       --remove ${failedHetSamples} \
        --make-bed \
-       --out ${plinkData}/filtered_output
-    '''
+       --out data_keep_het
+    """
 }
 
 process filterRelated {
@@ -274,19 +369,21 @@ process popProject {
 }
 
 workflow {
-    concatCHRFiles()
-    splitMultiAllelicVariants()
-    filterVariants() // Save output?
-    convertToPlinkFormat()
-    filterMissingSamples() // default threshold of 50%
-    createHetFile()
-    calculateMissingness() 
-    popProject()
-    // also show hwe / freq / etc ?
-    // remove variants if sample has missigness >0.25
-    // remove high heterozygosity samples (+/- 3 SD from the mean)
+    concatCHRFiles(params.inputDir)
+    splitMultiAllelicVariants(concatCHRFiles.output.sortedVCF)
+    filterMultiAllelicVariants(splitMultiAllelicVariants.output)
+    fixGTAnnot(filterMultiAllelicVariants.output)
+    filterVariants(fixGTAnnot.output)
+    convertToPlinkFormat(filterVariants.output.filteredVCF)
+    calculateMissingness(convertToPlinkFormat.output)
+    createHetFile(convertToPlinkFormat.output)
+    findMissingSamples(calculateMissingness.output)
+    filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output)
+    findHetSamples(createHetFile.output)
+    filterHetSamples(findHetSamples.output.failedHetSamples, filterMissingSamples.output)
+    // verwijder samples met < 10% non-ref calls (dit kan wel variabel zijn per dataset)
     // identity by state (IBS)
+    // popProject()
     // Bigsnpr (map sample genotypes PCs against 1000G to assign likely ancestry), wat moet hier nog mee gebeuren? Alleen EUR / alleen super-pop?
-
-    // Add plots between steps!
+    // also show hwe / freq / etc... more graphs?
 }
