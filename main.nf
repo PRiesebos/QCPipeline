@@ -377,15 +377,13 @@ workflow {
     convertToPlinkFormat(filterVariants.output.filteredVCF)
     calculateMissingness(convertToPlinkFormat.output)
     createHetFile(convertToPlinkFormat.output)
-    findMissingSamples(calculateMissingness.output) // default threshold of 50%
-    filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output) // default threshold of 50%
+    findMissingSamples(calculateMissingness.output)
+    filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output)
     findHetSamples(createHetFile.output)
     filterHetSamples(findHetSamples.output.failedHetSamples, filterMissingSamples.output)
     // verwijder samples met < 10% non-ref calls (dit kan wel variabel zijn per dataset)
     // identity by state (IBS)
     // popProject()
     // Bigsnpr (map sample genotypes PCs against 1000G to assign likely ancestry), wat moet hier nog mee gebeuren? Alleen EUR / alleen super-pop?
-    // also show hwe / freq / etc ?
-
-    // Add plots between steps!
+    // also show hwe / freq / etc... more graphs?
 }
