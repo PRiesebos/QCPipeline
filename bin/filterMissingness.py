@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 
+"""
+File:         filterMissingness.py
+Created:      2024/04/15
+Last Changed: 2024/04/18
+Author:       Peter Riesebos
+"""
+
 import argparse
 
 def get_samples_with_low_missing_rate(file_path, threshold):
@@ -9,8 +16,8 @@ def get_samples_with_low_missing_rate(file_path, threshold):
         next(file)
         for line in file:
             sample_data = line.strip().split('\t')
-            sample_id = sample_data[0]
-            missing_rate = float(sample_data[3])
+            sample_id = sample_data[1]
+            missing_rate = float(sample_data[4])
             if missing_rate < threshold:
                 samples.append(sample_id)
     return samples

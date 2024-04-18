@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 
+"""
+File:         heterozygosityCheck.py
+Created:      2024/04/15
+Last Changed: 2024/04/18
+Author:       Peter Riesebos
+"""
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import argparse
