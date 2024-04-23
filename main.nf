@@ -9,7 +9,6 @@ nextflow.enable.dsl=2
 
 
 process concatCHRFiles {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -26,13 +25,14 @@ process concatCHRFiles {
 
     script:
     """
+    mkdir -p ${params.inputDir}/qc_logs
+    mkdir -p ${params.inputDir}/figures
     bcftools concat ${vcfFilesPath}/*.vcf.gz -Oz -o merged_output.vcf.gz
     bcftools sort merged_output.vcf.gz -Oz -o sorted_merged_output.vcf.gz
     """
 }
 
 process splitMultiAllelicVariants {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -48,12 +48,11 @@ process splitMultiAllelicVariants {
 
     script:
     """
-    bcftools norm -m -any ${vcfFilesPath} -Oz -o ${params.inputDir}/split_sorted_merged_output.vcf.gz
+    bcftools norm -m -any ${vcfFilesPath} -Oz -o split_sorted_merged_output.vcf.gz
     """
 }
 
 process filterMultiAllelicVariants {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -69,12 +68,11 @@ process filterMultiAllelicVariants {
 
     script:
     """
-    bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o ${params.inputDir}/no_multi_allelic.vcf.gz
+    bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o no_multi_allelic.vcf.gz
     """
 }
 
 process fixGTAnnot {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -90,7 +88,11 @@ process fixGTAnnot {
 
     script:
     """
-    python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o ${params.inputDir}/no_multi_allelic_dotrevive.vcf.gz
+    # 1. fix GT field annotation
+    python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o no_multi_allelic_dotrevive.vcf.gz
+
+    # 2. add variant count to log file
+    zcat no_multi_allelic_dotrevive.vcf.gz | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count:\t{}" > ${params.inputDir}/qc_logs/variant_count.txt
     """
 }
 
@@ -129,12 +131,14 @@ process filterVariants {
 
     # 2. Run the custom VCF filter script
     python3 ${projectDir}/bin/custom_vcf_filter.py \${commandArguments} \
-    | tee ${params.inputDir}/custom_vcf_filter.log
+    | tee ${params.inputDir}/qc_logs/custom_vcf_filter.log
+
+    # 3. add variant count to log file
+    zcat no_multi_allelic_dotrevive-filtered.vcf.gz | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count filtered:\t{}" >> ${params.inputDir}/qc_logs/variant_count.txt
     """
 }
 
 process convertToPlinkFormat {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -169,13 +173,16 @@ process calculateMissingness {
     path bedFile
     path bimFile
     path famFile
+    path vcfFile
 
     output:
-    path "*.smiss"
+    path "PRE_FILTER.smiss"
+    path "POST_FILTER.smiss", emit: missingFile
 
     script:
     """
-    plink2 --bfile plink2 --missing --out missing_output
+    plink2 --vcf ${vcfFile} --missing --out PRE_FILTER
+    plink2 --bfile plink2 --missing --out POST_FILTER
     """
 }
 
@@ -217,17 +224,16 @@ process findMissingSamples {
     path smiss
 
     output:
-    path 'filtered_samples.txt', emit: filteredSamplesFile
+    path 'qc_logs/filtered_samples.txt', emit: filteredSamplesFile
 
     script:
     """
-    python ${projectDir}/bin/filterMissingness.py ${smiss} ${params.inputDir}/filtered_samples.txt --threshold 0.5
+    python ${projectDir}/bin/filterMissingness.py ${smiss} ${params.inputDir}/qc_logs/filtered_samples.txt --threshold 0.5
     """
 }
 
 // Filter these samples. Output -> filtered plink files
 process filterMissingSamples {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -265,9 +271,9 @@ process findHetSamples {
     path het_file
 
     output:
-    path "*.png"
-    path "*Failed.txt"
-    path "*FailedSamplesOnly.txt", emit: failedHetSamples
+    path "figures/*.png"
+    path "qc_logs/*Failed.txt"
+    path "qc_logs/*FailedSamplesOnly.txt", emit: failedHetSamples
 
     script:
     """
@@ -291,16 +297,34 @@ process filterHetSamples {
     path famFile
 
     output:
-    path 'data_keep_het.bed', emit: bedFile
-    path 'data_keep_het.bim', emit: bimFile
-    path 'data_keep_het.fam', emit: famFile
+    path 'output.bed', emit: bedFile
+    path 'output.bim', emit: bimFile
+    path 'output.fam', emit: famFile
 
     script:
     """
     plink2 --bfile data_keep \
        --remove ${failedHetSamples} \
        --make-bed \
-       --out data_keep_het
+       --out output
+    """
+}
+
+process createMetricsFile {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    output:
+    path "qc_logs/metrics_matrix.tsv.gz", emit: metrics_matrix
+
+    script:
+    """
+    python3 ${projectDir}/bin/CombineQCFiles.py ${params.inputDir} ${params.inputDir}/qc_logs/metrics_matrix.tsv
     """
 }
 
@@ -375,9 +399,9 @@ workflow {
     fixGTAnnot(filterMultiAllelicVariants.output)
     filterVariants(fixGTAnnot.output)
     convertToPlinkFormat(filterVariants.output.filteredVCF)
-    calculateMissingness(convertToPlinkFormat.output)
+    calculateMissingness(convertToPlinkFormat.output, fixGTAnnot.output)
     createHetFile(convertToPlinkFormat.output)
-    findMissingSamples(calculateMissingness.output)
+    findMissingSamples(calculateMissingness.output.missingFile)
     filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output)
     findHetSamples(createHetFile.output)
     filterHetSamples(findHetSamples.output.failedHetSamples, filterMissingSamples.output)
