@@ -7,7 +7,6 @@ Author:       Peter Riesebos & Orfeas Gkourlias
 
 nextflow.enable.dsl=2
 
-
 process concatCHRFiles {
     storeDir "${params.inputDir}"
     errorStrategy 'retry'
@@ -304,6 +303,33 @@ process filterHetSamples {
     """
 }
 
+
+process filterLowAltFreq {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 4
+
+    input:
+    path bed
+    path bim
+    path fam
+
+    output:
+    path "${bed.SimpleName}.over10.bed"
+    path "${bed.SimpleName}.over10.bim"
+    path "${bed.SimpleName}.over10.fam"
+    
+    script:
+    """
+    plink2 --sample-counts 'cols=homref,het,homalt,missing' --bfile ${bed.SimpleName} --out ${bed.SimpleName}
+    nonalt.py -i ${bed.SimpleName}.scount -o ${bed.SimpleName}-keep.txt
+    plink2 --keep ${bed.SimpleName}-keep.txt --bfile ${bed.SimpleName} --make-bed --out ${bed.SimpleName}.over10
+    """
+}
+
 process filterRelated {
     errorStrategy 'retry'
     maxRetries 1
@@ -313,7 +339,9 @@ process filterRelated {
     cpus 4
 
     input:
-    path vcf
+    path bed
+    path bim
+    path fam
 
     output:
     path 'RelatednessCheck.bed', emit: bedFile
@@ -325,35 +353,38 @@ process filterRelated {
     script:
     """
     # 1. Do relatedness check
-    ~/plink2 --vcf ${plinkData} \
+    plink2 --bfile ${bed.SimpleName}.over10 \
         --make-king-table \
         --king-table-filter ${params.kingTableFilter} \
         --out related \
         --threads 4 \
 
     # 2. Create sample list of non-related samples
-    Rscript find_related_samples.R --kin_file related.kin0 --target_bed ${bedFile}
+    find_related_samples.R --kin_file related.kin0 --target_bed ${bed}
 
     # 3. Remove samples that are not on the list created above
-    ~/plink2 --bed ${bedFile} \
-        --bim ${bimFile} \
-        --fam ${famFile} \
+    plink2 --bed ${bed} \
+        --bim ${bim} \
+        --fam ${fam} \
         --keep RelatednessPassedSamples.txt \
         --make-bed \
         --out RelatednessCheck
     """
 }
 
+
 process popProject {
     errorStrategy 'retry'
     maxRetries 1
 
     time '4h'
-    memory '8 GB'
+    memory '24 GB'
     cpus 4
 
     input:
-    path vcf
+    path bed
+    path bim
+    path fam
     
     output:
     path '*.png'
@@ -363,8 +394,8 @@ process popProject {
     
     script:
     """
-    Rscript project_samples_to_superpop.R --ref_bed ${params.refPath}.bed \
-        --target_bed ${bedFile} --ref_pop ${params.refPop}
+    project_samples_to_superpop.R --ref_bed ${params.refPath} \
+        --target_bed ${bed} --ref_pop ${params.refPop}
     """
 }
 
@@ -381,6 +412,9 @@ workflow {
     filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output)
     findHetSamples(createHetFile.output)
     filterHetSamples(findHetSamples.output.failedHetSamples, filterMissingSamples.output)
+    filterLowAltFreq(filterHetSamples.output)
+    filterRelated(filterLowAltFreq.output)
+    popProject(filterRelated.output.bedFile, filterRelated.output.bimFile, filterRelated.output.famFile)
     // verwijder samples met < 10% non-ref calls (dit kan wel variabel zijn per dataset)
     // identity by state (IBS)
     // popProject()
