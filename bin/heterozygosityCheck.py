@@ -26,7 +26,7 @@ def main(input_file, output_folder):
     het_fail_samples = het[(het["Het_Rate"] < mean_het_rate - 3 * std_dev_het_rate) | (het["Het_Rate"] > mean_het_rate + 3 * std_dev_het_rate)]
     het_fail_samples_only = het_fail_samples["#IID"]
     het_fail_samples.to_csv(output_folder + '/qc_logs/HeterozygosityFailed.txt', sep='\t', index=False)
-    het_fail_samples_only.to_csv(output_folder + '/qc_logs//HeterozygosityFailedSamplesOnly.txt', sep='\t', index=False, header=None)
+    het_fail_samples_only.to_csv(output_folder + '/qc_logs/HeterozygosityFailedSamplesOnly.txt', sep='\t', index=False, header=None)
 
     # Plot histogram
     plt.figure(figsize=(10, 6), facecolor="white")
