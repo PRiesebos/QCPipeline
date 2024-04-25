@@ -6,6 +6,7 @@ import glob
 import sys
 import gzip
 import math
+import os
 
 
 if len(sys.argv) < 3:
@@ -74,14 +75,13 @@ files = glob.glob(outputDir+"/rna_seq_metrics/*_rnaseqmetrics.gz")
 samples.update(getSamples(files,"_rnaseqmetrics.gz"))
 print("{} samples loaded sofar ".format(len(samples)))
 
-# These log files are currently missing ...
-# files = glob.glob(outputDir+"/star/SRR*/*_ReadsPerGene.out.tab.gz")
-# samples.update(getSamples(files,"_ReadsPerGene.out.tab.gz"))
-# print("{} samples loaded sofar ".format(len(samples)))
+files = glob.glob(outputDir+"/star/SRR*/*_ReadsPerGene.out.tab.gz")
+samples.update(getSamples(files,"_ReadsPerGene.out.tab.gz"))
+print("{} samples loaded sofar ".format(len(samples)))
 
-# files = glob.glob(outputDir+"/star/SRR*/*_Log.final.out.gz")
-# samples.update(getSamples(files,"_Log.final.out.gz"))
-# print("{} samples loaded total ".format(len(samples)))
+files = glob.glob(outputDir+"/star/SRR*/*_Log.final.out.gz")
+samples.update(getSamples(files,"_Log.final.out.gz"))
+print("{} samples loaded total ".format(len(samples)))
 
 
 
@@ -93,7 +93,9 @@ metrics = set()
 # alignment_summary_metrics - skip lines w/ #, skip empty lines
 # header line starts with CATEGORY
 # line with PAIR has average numbers
-files = glob.glob(outputDir+"/multiple_metrics/{SRR*,ERR*}/multiple_metrics.alignment_summary_metrics.gz")
+files = []
+for pattern in ["SRR*", "ERR*"]:
+    files.extend(glob.glob(os.path.join(outputDir, "multiple_metrics", pattern + "/multiple_metrics.alignment_summary_metrics.gz")))
 for file in files:
     print("Parsing: "+file)
     sample = getSampleFromDir(file)
@@ -127,7 +129,9 @@ for file in files:
 
 # insert_size_metrics - skip lines w/ #, skip empty lines; first line begins with; second line has stats 
 # MEDIAN_INSERT_SIZE
-files = glob.glob(outputDir+"/multiple_metrics/{SRR*,ERR*}/multiple_metrics.insert_size_metrics.gz")
+files = []
+for pattern in ["SRR*", "ERR*"]:
+    files.extend(glob.glob(os.path.join(outputDir, "multiple_metrics", pattern + "/multiple_metrics.insert_size_metrics.gz")))
 for file in files:
     print("Parsing: "+file)
     sample = getSampleFromDir(file)
@@ -161,7 +165,9 @@ for file in files:
 # *.rna_metrics.log
 # header starts with ## METRICS CLASS; next line has column names, starting with PF_BASES
 # line afterwards values
-files = glob.glob(outputDir+"/rna_seq_metrics/{SRR*,ERR*}/*_rnaseqmetrics.gz")
+files = []
+for pattern in ["SRR*", "ERR*"]:
+    files.extend(glob.glob(os.path.join(outputDir, "rna_seq_metrics", pattern + "_rnaseqmetrics.gz")))
 for file in files:
     print("Parsing: "+file)
     sample = getSample(file,"_rnaseqmetrics.gz")
@@ -193,113 +199,117 @@ for file in files:
     data[sample] = sampledata
 
 # STAR count metrics
-# files = glob.glob(outputDir+"/star/{SRR*,ERR*}/*_ReadsPerGene.out.tab.gz")
-# for file in files:
-#     print("Parsing: "+file)
-#     sample = getSample(file,"_ReadsPerGene.out.tab.gz")
-#     samples.add(sample)
-#     sampledata = data.get(sample)
-#     if sampledata is None:
-#         sampledata = {}
-#     fh = getfh(file)
-#     mapped = [0,0,0]
+files = []
+for pattern in ["SRR*", "ERR*"]:
+    files.extend(glob.glob(os.path.join(outputDir, "star", pattern + "/*_ReadsPerGene.out.tab.gz")))
+for file in files:
+    print("Parsing: "+file)
+    sample = getSample(file,"_ReadsPerGene.out.tab.gz")
+    samples.add(sample)
+    sampledata = data.get(sample)
+    if sampledata is None:
+        sampledata = {}
+    fh = getfh(file)
+    mapped = [0,0,0]
     
-#     for line in fh:
-#         elems = line.strip().split("\t")
-#         phen = elems[0]
-#         if not phen.startswith("ENSG"):
-#             for i in range(1,4):
-#                 ct = elems[i]
-#                 phenoname = elems[0]
-#                 if i == 1:
-#                     phenoname = "STAR_TAB_"+phenoname + "_sum"
-#                 elif i == 2:
-#                     phenoname = "STAR_TAB_"+phenoname + "_strandA"
-#                 else:
-#                     phenoname = "STAR_TAB_"+phenoname + "_strandB"
-#                 sampledata[phenoname] = ct
-#                 metrics.add(phenoname)
-#         else:
-#             # sum up the counts for each column
-#             for i in range(1,4):
-#                 ct = int(elems[i])
-#                 mapped[i-1] += ct
-#     for i in range(0,len(mapped)): 
-#             if i == 0:
-#                 phenoname = "STAR_TAB_N_mapped_sum"
-#             elif i == 1:
-#                 phenoname = "STAR_TAB_N_mapped_strandA"
-#             else:
-#                 phenoname = "STAR_TAB_N_mapped_strandB"
-#             sampledata[phenoname] = str(mapped[i])
-#             metrics.add(phenoname)
+    for line in fh:
+        elems = line.strip().split("\t")
+        phen = elems[0]
+        if not phen.startswith("ENSG"):
+            for i in range(1,4):
+                ct = elems[i]
+                phenoname = elems[0]
+                if i == 1:
+                    phenoname = "STAR_TAB_"+phenoname + "_sum"
+                elif i == 2:
+                    phenoname = "STAR_TAB_"+phenoname + "_strandA"
+                else:
+                    phenoname = "STAR_TAB_"+phenoname + "_strandB"
+                sampledata[phenoname] = ct
+                metrics.add(phenoname)
+        else:
+            # sum up the counts for each column
+            for i in range(1,4):
+                ct = int(elems[i])
+                mapped[i-1] += ct
+    for i in range(0,len(mapped)): 
+            if i == 0:
+                phenoname = "STAR_TAB_N_mapped_sum"
+            elif i == 1:
+                phenoname = "STAR_TAB_N_mapped_strandA"
+            else:
+                phenoname = "STAR_TAB_N_mapped_strandB"
+            sampledata[phenoname] = str(mapped[i])
+            metrics.add(phenoname)
 
-#     fh.close()
-#     data[sample] = sampledata
+    fh.close()
+    data[sample] = sampledata
 
 
 # STAR final logs
-# allowedp = [
-#     "Number_of_input_reads",
-#     "Average_input_read_length",
-#     "Uniquely_mapped_reads_number",
-#     "Uniquely_mapped_reads_PCT",
-#     "Average_mapped_length",
-#     "Number_of_splices_Total",
-#     "Number_of_splices_Annotated_(sjdb)",
-#     "Number_of_splices_GT/AG",
-#     "Number_of_splices_GC/AG",
-#     "Number_of_splices_AT/AC",
-#     "Number_of_splices_Non-canonical",
-#     "Mismatch_rate_per_base_PCT",
-#     "Deletion_rate_per_base",
-#     "Deletion_average_length",
-#     "Insertion_rate_per_base",
-#     "Insertion_average_length",
-#     "Number_of_reads_mapped_to_multiple_loci",
-#     "PCT_of_reads_mapped_to_multiple_loci",
-#     "Number_of_reads_mapped_to_too_many_loci",
-#     "PCT_of_reads_mapped_to_too_many_loci",
-#     "PCT_of_reads_unmapped_too_many_mismatches",
-#     "PCT_of_reads_unmapped_too_short",
-#     "PCT_of_reads_unmapped_other",
-#     "Number_of_chimeric_reads",
-#     "PCT_of_chimeric_reads"
-# ]
-# allowedpset = set()
-# for p in allowedp:
-#     allowedpset.add(p)
+allowedp = [
+    "Number_of_input_reads",
+    "Average_input_read_length",
+    "Uniquely_mapped_reads_number",
+    "Uniquely_mapped_reads_PCT",
+    "Average_mapped_length",
+    "Number_of_splices_Total",
+    "Number_of_splices_Annotated_(sjdb)",
+    "Number_of_splices_GT/AG",
+    "Number_of_splices_GC/AG",
+    "Number_of_splices_AT/AC",
+    "Number_of_splices_Non-canonical",
+    "Mismatch_rate_per_base_PCT",
+    "Deletion_rate_per_base",
+    "Deletion_average_length",
+    "Insertion_rate_per_base",
+    "Insertion_average_length",
+    "Number_of_reads_mapped_to_multiple_loci",
+    "PCT_of_reads_mapped_to_multiple_loci",
+    "Number_of_reads_mapped_to_too_many_loci",
+    "PCT_of_reads_mapped_to_too_many_loci",
+    "PCT_of_reads_unmapped_too_many_mismatches",
+    "PCT_of_reads_unmapped_too_short",
+    "PCT_of_reads_unmapped_other",
+    "Number_of_chimeric_reads",
+    "PCT_of_chimeric_reads"
+]
+allowedpset = set()
+for p in allowedp:
+    allowedpset.add(p)
 
-# files = glob.glob(outputDir+"/star/SRR*/*_Log.final.out.gz")
-# for file in files:
-#     print("Parsing: "+file)
-#     sample = getSample(file,"_Log.final.out.gz")
-#     samples.add(sample)
-#     sampledata = data.get(sample)
-#     if sampledata is None:
-#         sampledata = {}
+files = []
+for pattern in ["SRR*", "ERR*"]:
+    files.extend(glob.glob(os.path.join(outputDir, "star", pattern + "/*_Log.final.out.gz")))
+for file in files:
+    print("Parsing: "+file)
+    sample = getSample(file,"_Log.final.out.gz")
+    samples.add(sample)
+    sampledata = data.get(sample)
+    if sampledata is None:
+        sampledata = {}
 
-#     fh = getfh(file)
-#     for line in fh:
-#         line = line.strip()
-#         if "|" in line:
-#             line = line.replace("|","").strip()
+    fh = getfh(file)
+    for line in fh:
+        line = line.strip()
+        if "|" in line:
+            line = line.replace("|","").strip()
             
-#             elems = line.split("\t")
-#             if len(elems) == 2:
-#                 p = elems[0].strip().replace(" ","_")
-#                 p = p.replace(":","")
-#                 p = p.replace(",","")
-#                 p = p.replace("%","PCT")
-#                 # print(p)
-#                 if p in allowedpset:
-#                     v = elems[1].replace("%","")
-#                     p = "STAR_LOG_"+p
-#                     sampledata[p] = v
-#                     metrics.add(p)
-#     fh.close()
-#     # sys.exit()
-#     data[sample] = sampledata
+            elems = line.split("\t")
+            if len(elems) == 2:
+                p = elems[0].strip().replace(" ","_")
+                p = p.replace(":","")
+                p = p.replace(",","")
+                p = p.replace("%","PCT")
+                # print(p)
+                if p in allowedpset:
+                    v = elems[1].replace("%","")
+                    p = "STAR_LOG_"+p
+                    sampledata[p] = v
+                    metrics.add(p)
+    fh.close()
+    # sys.exit()
+    data[sample] = sampledata
 
 
 variant_count = glob.glob(outputDir+"/qc_logs/variant_count.txt")[0]
@@ -330,20 +340,19 @@ for sample in samples:
     data[sample] = sampledata
 
 
-def calculate_missingness(imiss_file, variant_count, metric_name, data_key):
+def calculate_missingness(imiss_file, variant_count, metric_name, data_key, column_index):
     try:
         with getfh(imiss_file) as imiss_fh:
             next(imiss_fh)  # Skip the first row (headers)
             for line in imiss_fh:
                 elems = line.strip().split()
-                sample = elems[1].replace('-splitreads', '')
+                sample = elems[column_index].replace('-splitreads', '')
                 missing_value = elems[-1].strip()
                 sampledata = data.get(sample, {})
-                sampledata[metric_name] = missing_value
+                sampledata[metric_name] = str(missing_value)
                 metrics.add(metric_name)
                 data[sample] = sampledata
-
-                additional_row_value = (1 - float(missing_value)) * variant_count
+                additional_row_value = (1 - float(missing_value)) * float(variant_count)
                 rounded_down_value = math.floor(additional_row_value)
                 sampledata[f'VARIANTS_WITH_GENOTYPE_CALL_{data_key}'] = str(rounded_down_value)
                 metrics.add(f'VARIANTS_WITH_GENOTYPE_CALL_{data_key}')
@@ -352,10 +361,9 @@ def calculate_missingness(imiss_file, variant_count, metric_name, data_key):
         print(f"Warning: .smiss file not found - {imiss_file}")
 
 # Calculate missingness and the additional row for each sample
-calculate_missingness(smiss_file_pre_filter, variant_count_pre, 'MISSINGNESS_PRE_FILTER', 'PRE_FILTER')
-
+calculate_missingness(smiss_file_pre_filter, variant_count_pre, 'MISSINGNESS_PRE_FILTER', 'PRE_FILTER', 0)
 # Calculate missingness and the additional row for the filtered VCF file
-calculate_missingness(smiss_file_post_filter, variant_count_post, 'MISSINGNESS_AFTER_FILTER', 'AFTER_FILTER')
+calculate_missingness(smiss_file_post_filter, variant_count_post, 'MISSINGNESS_AFTER_FILTER', 'AFTER_FILTER', 1)
 
 # currently hardcoded, needs to be changed
 samples_txt_file = "/scratch/hb-functionalgenomics/projects/gut-bulk/ongoing/2024-02-07-GutPublicRNASeq/extra_scripts/samplesWithPrediction_16_09_22_noOutliers.txt"

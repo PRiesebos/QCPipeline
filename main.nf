@@ -1,7 +1,7 @@
 """
 File:         main.nf
 Created:      2024/04/11
-Last Changed: 2024/04/18
+Last Changed: 2024/04/25
 Author:       Peter Riesebos & Orfeas Gkourlias
 """
 
@@ -27,7 +27,7 @@ process concatCHRFiles {
     """
     mkdir -p ${params.inputDir}/qc_logs
     mkdir -p ${params.inputDir}/figures
-    bcftools concat ${vcfFilesPath}/*.vcf.gz -Oz -o merged_output.vcf.gz
+    bcftools concat ${vcfFilesPath}/chr*.vcf.gz -Oz -o merged_output.vcf.gz
     bcftools sort merged_output.vcf.gz -Oz -o sorted_merged_output.vcf.gz
     """
 }
@@ -52,25 +52,25 @@ process splitMultiAllelicVariants {
     """
 }
 
-process filterMultiAllelicVariants {
-    errorStrategy 'retry'
-    maxRetries 1
+// process filterMultiAllelicVariants {
+//     errorStrategy 'retry'
+//     maxRetries 1
 
-    time '4h'
-    memory '8 GB'
-    cpus 1
+//     time '4h'
+//     memory '8 GB'
+//     cpus 1
 
-    input:
-    path vcfFilesPath
+//     input:
+//     path vcfFilesPath
 
-    output:
-    path "no_multi_allelic.vcf.gz"
+//     output:
+//     path "no_multi_allelic.vcf.gz"
 
-    script:
-    """
-    bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o no_multi_allelic.vcf.gz
-    """
-}
+//     script:
+//     """
+//     bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o no_multi_allelic.vcf.gz
+//     """
+// }
 
 process fixGTAnnot {
     errorStrategy 'retry'
@@ -84,15 +84,12 @@ process fixGTAnnot {
     path vcfFilesPath
 
     output:
-    path "no_multi_allelic_dotrevive.vcf.gz"
+    path "no_multi_allelic_dotrevive.vcf.gz", emit: unfilteredVCF
 
     script:
     """
     # 1. fix GT field annotation
     python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o no_multi_allelic_dotrevive.vcf.gz
-
-    # 2. add variant count to log file
-    zcat no_multi_allelic_dotrevive.vcf.gz | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count:\t{}" > ${params.inputDir}/qc_logs/variant_count.txt
     """
 }
 
@@ -132,9 +129,28 @@ process filterVariants {
     # 2. Run the custom VCF filter script
     python3 ${projectDir}/bin/custom_vcf_filter.py \${commandArguments} \
     | tee ${params.inputDir}/qc_logs/custom_vcf_filter.log
+    """
+}
 
-    # 3. add variant count to log file
-    zcat no_multi_allelic_dotrevive-filtered.vcf.gz | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count filtered:\t{}" >> ${params.inputDir}/qc_logs/variant_count.txt
+process getMetrics {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path unfilteredVCF
+    path filteredVCF
+
+    // output:
+    // path "qc_logs/variant_count.txt", emit: variantCount
+
+    script:
+    """
+    zcat ${unfilteredVCF} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count:\t{}" > ${params.inputDir}/qc_logs/variant_count.txt
+    zcat ${filteredVCF} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count filtered:\t{}" >> ${params.inputDir}/qc_logs/variant_count.txt
     """
 }
 
@@ -319,8 +335,13 @@ process createMetricsFile {
     memory '8 GB'
     cpus 1
 
+    input:
+    path bedFile
+    path bimFile
+    path famFile
+
     output:
-    path "qc_logs/metrics_matrix.tsv.gz", emit: metrics_matrix
+    path "qc_logs/metrics_matrix.tsv", emit: metrics_matrix
 
     script:
     """
@@ -395,9 +416,10 @@ process popProject {
 workflow {
     concatCHRFiles(params.inputDir)
     splitMultiAllelicVariants(concatCHRFiles.output.sortedVCF)
-    filterMultiAllelicVariants(splitMultiAllelicVariants.output)
-    fixGTAnnot(filterMultiAllelicVariants.output)
+    // filterMultiAllelicVariants(splitMultiAllelicVariants.output)
+    fixGTAnnot(splitMultiAllelicVariants.output)
     filterVariants(fixGTAnnot.output)
+    getMetrics(fixGTAnnot.output.unfilteredVCF, filterVariants.output.filteredVCF)
     convertToPlinkFormat(filterVariants.output.filteredVCF)
     calculateMissingness(convertToPlinkFormat.output, fixGTAnnot.output)
     createHetFile(convertToPlinkFormat.output)
@@ -405,9 +427,5 @@ workflow {
     filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output)
     findHetSamples(createHetFile.output)
     filterHetSamples(findHetSamples.output.failedHetSamples, filterMissingSamples.output)
-    // verwijder samples met < 10% non-ref calls (dit kan wel variabel zijn per dataset)
-    // identity by state (IBS)
-    // popProject()
-    // Bigsnpr (map sample genotypes PCs against 1000G to assign likely ancestry), wat moet hier nog mee gebeuren? Alleen EUR / alleen super-pop?
-    // also show hwe / freq / etc... more graphs?
+    createMetricsFile(filterHetSamples.output)
 }
