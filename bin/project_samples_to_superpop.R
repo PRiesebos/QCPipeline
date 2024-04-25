@@ -159,3 +159,4 @@ for(population in c("EUR", "EAS", "AMR", "SAS", "AFR")){
 # Write super population assignments to out file
 colnames(population_assign_res)[3:ncol(population_assign_res)] <- c("EUR", "EAS", "AMR", "SAS", "AFR")
 fwrite(population_assign_res[, -1], "PopAssignResults.txt", sep = "\t", quote = FALSE )
+
