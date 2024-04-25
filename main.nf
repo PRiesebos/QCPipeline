@@ -1,14 +1,13 @@
 """
 File:         main.nf
 Created:      2024/04/11
-Last Changed: 2024/04/18
+Last Changed: 2024/04/25
 Author:       Peter Riesebos & Orfeas Gkourlias
 """
 
 nextflow.enable.dsl=2
 
 process concatCHRFiles {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -25,13 +24,14 @@ process concatCHRFiles {
 
     script:
     """
-    bcftools concat ${vcfFilesPath}/*.vcf.gz -Oz -o merged_output.vcf.gz
+    mkdir -p ${params.inputDir}/qc_logs
+    mkdir -p ${params.inputDir}/figures
+    bcftools concat ${vcfFilesPath}/chr*.vcf.gz -Oz -o merged_output.vcf.gz
     bcftools sort merged_output.vcf.gz -Oz -o sorted_merged_output.vcf.gz
     """
 }
 
 process splitMultiAllelicVariants {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -47,33 +47,31 @@ process splitMultiAllelicVariants {
 
     script:
     """
-    bcftools norm -m -any ${vcfFilesPath} -Oz -o ${params.inputDir}/split_sorted_merged_output.vcf.gz
+    bcftools norm -m -any ${vcfFilesPath} -Oz -o split_sorted_merged_output.vcf.gz
     """
 }
 
-process filterMultiAllelicVariants {
-    storeDir "${params.inputDir}"
-    errorStrategy 'retry'
-    maxRetries 1
+// process filterMultiAllelicVariants {
+//     errorStrategy 'retry'
+//     maxRetries 1
 
-    time '4h'
-    memory '8 GB'
-    cpus 1
+//     time '4h'
+//     memory '8 GB'
+//     cpus 1
 
-    input:
-    path vcfFilesPath
+//     input:
+//     path vcfFilesPath
 
-    output:
-    path "no_multi_allelic.vcf.gz"
+//     output:
+//     path "no_multi_allelic.vcf.gz"
 
-    script:
-    """
-    bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o ${params.inputDir}/no_multi_allelic.vcf.gz
-    """
-}
+//     script:
+//     """
+//     bcftools view --max-alleles 2 ${vcfFilesPath} -Oz -o no_multi_allelic.vcf.gz
+//     """
+// }
 
 process fixGTAnnot {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -85,11 +83,12 @@ process fixGTAnnot {
     path vcfFilesPath
 
     output:
-    path "no_multi_allelic_dotrevive.vcf.gz"
+    path "no_multi_allelic_dotrevive.vcf.gz", emit: unfilteredVCF
 
     script:
     """
-    python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o ${params.inputDir}/no_multi_allelic_dotrevive.vcf.gz
+    # 1. fix GT field annotation
+    python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o no_multi_allelic_dotrevive.vcf.gz
     """
 }
 
@@ -128,12 +127,33 @@ process filterVariants {
 
     # 2. Run the custom VCF filter script
     python3 ${projectDir}/bin/custom_vcf_filter.py \${commandArguments} \
-    | tee ${params.inputDir}/custom_vcf_filter.log
+    | tee ${params.inputDir}/qc_logs/custom_vcf_filter.log
+    """
+}
+
+process getMetrics {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path unfilteredVCF
+    path filteredVCF
+
+    // output:
+    // path "qc_logs/variant_count.txt", emit: variantCount
+
+    script:
+    """
+    zcat ${unfilteredVCF} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count:\t{}" > ${params.inputDir}/qc_logs/variant_count.txt
+    zcat ${filteredVCF} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count filtered:\t{}" >> ${params.inputDir}/qc_logs/variant_count.txt
     """
 }
 
 process convertToPlinkFormat {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -168,13 +188,16 @@ process calculateMissingness {
     path bedFile
     path bimFile
     path famFile
+    path vcfFile
 
     output:
-    path "*.smiss"
+    path "PRE_FILTER.smiss"
+    path "POST_FILTER.smiss", emit: missingFile
 
     script:
     """
-    plink2 --bfile plink2 --missing --out missing_output
+    plink2 --vcf ${vcfFile} --missing --out PRE_FILTER
+    plink2 --bfile plink2 --missing --out POST_FILTER
     """
 }
 
@@ -216,17 +239,16 @@ process findMissingSamples {
     path smiss
 
     output:
-    path 'filtered_samples.txt', emit: filteredSamplesFile
+    path 'qc_logs/filtered_samples.txt', emit: filteredSamplesFile
 
     script:
     """
-    python ${projectDir}/bin/filterMissingness.py ${smiss} ${params.inputDir}/filtered_samples.txt --threshold 0.5
+    python ${projectDir}/bin/filterMissingness.py ${smiss} ${params.inputDir}/qc_logs/filtered_samples.txt --threshold 0.5
     """
 }
 
 // Filter these samples. Output -> filtered plink files
 process filterMissingSamples {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -264,9 +286,9 @@ process findHetSamples {
     path het_file
 
     output:
-    path "*.png"
-    path "*Failed.txt"
-    path "*FailedSamplesOnly.txt", emit: failedHetSamples
+    path "figures/*.png"
+    path "qc_logs/*Failed.txt"
+    path "qc_logs/*FailedSamplesOnly.txt", emit: failedHetSamples
 
     script:
     """
@@ -290,16 +312,39 @@ process filterHetSamples {
     path famFile
 
     output:
-    path 'data_keep_het.bed', emit: bedFile
-    path 'data_keep_het.bim', emit: bimFile
-    path 'data_keep_het.fam', emit: famFile
+    path 'output.bed', emit: bedFile
+    path 'output.bim', emit: bimFile
+    path 'output.fam', emit: famFile
 
     script:
     """
     plink2 --bfile data_keep \
        --remove ${failedHetSamples} \
        --make-bed \
-       --out data_keep_het
+       --out output
+    """
+}
+
+process createMetricsFile {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path bedFile
+    path bimFile
+    path famFile
+
+    output:
+    path "qc_logs/metrics_matrix.tsv", emit: metrics_matrix
+
+    script:
+    """
+    python3 ${projectDir}/bin/CombineQCFiles.py ${params.inputDir} ${params.inputDir}/qc_logs/metrics_matrix.tsv
     """
 }
 
@@ -402,22 +447,19 @@ process popProject {
 workflow {
     concatCHRFiles(params.inputDir)
     splitMultiAllelicVariants(concatCHRFiles.output.sortedVCF)
-    filterMultiAllelicVariants(splitMultiAllelicVariants.output)
-    fixGTAnnot(filterMultiAllelicVariants.output)
+    // filterMultiAllelicVariants(splitMultiAllelicVariants.output)
+    fixGTAnnot(splitMultiAllelicVariants.output)
     filterVariants(fixGTAnnot.output)
+    getMetrics(fixGTAnnot.output.unfilteredVCF, filterVariants.output.filteredVCF)
     convertToPlinkFormat(filterVariants.output.filteredVCF)
-    calculateMissingness(convertToPlinkFormat.output)
+    calculateMissingness(convertToPlinkFormat.output, fixGTAnnot.output)
     createHetFile(convertToPlinkFormat.output)
-    findMissingSamples(calculateMissingness.output)
+    findMissingSamples(calculateMissingness.output.missingFile)
     filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output)
     findHetSamples(createHetFile.output)
     filterHetSamples(findHetSamples.output.failedHetSamples, filterMissingSamples.output)
+    createMetricsFile(filterHetSamples.output)
     filterLowAltFreq(filterHetSamples.output)
     filterRelated(filterLowAltFreq.output)
     popProject(filterRelated.output.bedFile, filterRelated.output.bimFile, filterRelated.output.famFile)
-    // verwijder samples met < 10% non-ref calls (dit kan wel variabel zijn per dataset)
-    // identity by state (IBS)
-    // popProject()
-    // Bigsnpr (map sample genotypes PCs against 1000G to assign likely ancestry), wat moet hier nog mee gebeuren? Alleen EUR / alleen super-pop?
-    // also show hwe / freq / etc... more graphs?
 }
