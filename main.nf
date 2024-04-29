@@ -72,6 +72,7 @@ process splitMultiAllelicVariants {
 // }
 
 process fixGTAnnot {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -89,6 +90,40 @@ process fixGTAnnot {
     """
     # 1. fix GT field annotation
     python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o no_multi_allelic_dotrevive.vcf.gz
+    """
+}
+
+process createGraphs {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 0
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path testVCF
+
+    output:
+    path "*stats.tsv.gz"
+    path "*regions.tsv.gz"
+    path "*rates.png"
+    path "*freqs.png"
+
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*rates.png'
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*freqs.png'
+
+    script:
+    """
+    # 1 run vcf_stats.py
+    python3 ${projectDir}/bin/vcf_stats.py -i ${testVCF} -o output_stats.tsv.gz
+    
+    # 2 run regions.py
+    python3 ${projectDir}/bin/get_region.py -all -i output_stats.tsv.gz -g ${params.annotationGTF} -o output_stats_regions.tsv.gz
+
+    # 3 run graph_summary.
+    Rscript ${projectDir}/bin/graph_summary.R output_stats_regions.tsv.gz
     """
 }
 
@@ -172,6 +207,29 @@ process convertToPlinkFormat {
     script:
     """
     plink2 --vcf ${vcfFile} --make-bed
+    """
+}
+
+process convertToPlinkFormatAlt {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path vcfFile
+
+    output:
+    path "*.bed", emit: bedFile
+    path "*.bim", emit: bimFile
+    path "*.fam", emit: famFile
+
+    script:
+    """
+    plink2 --vcf ${vcfFile} --make-bed --out beagle_imputed
     """
 }
 
@@ -297,7 +355,6 @@ process findHetSamples {
 }
 
 process filterHetSamples {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -363,7 +420,7 @@ process filterLowAltFreq {
     path fam
 
     output:
-    path "${bed.SimpleName}.over10.bed"
+    path "${bed.SimpleName}.over10.bed", emit: lowAltFreqBedFile
     path "${bed.SimpleName}.over10.bim"
     path "${bed.SimpleName}.over10.fam"
     
@@ -376,6 +433,7 @@ process filterLowAltFreq {
 }
 
 process filterRelated {
+    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -394,6 +452,8 @@ process filterRelated {
     path 'RelatednessCheck.fam', emit: famFile
     path 'related.kin0'
     path 'RelatednessPassedSamples.txt'
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '*.txt'
 
     script:
     """
@@ -417,6 +477,54 @@ process filterRelated {
     """
 }
 
+process convertBackToVCF {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '6h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path bed
+    path bim
+    path fam
+
+    output:
+    path "final.vcf.gz", emit: finalVCF
+
+    script:
+    """
+    plink2 --bed ${bed} --bim ${bim} --fam ${fam} --export vcf-4.2 bgz --out final
+    """
+}
+
+process runBeagle {
+    storeDir "${params.inputDir}"
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '8h'
+    memory '12 GB'
+    cpus 4
+
+    input:
+    path vcfFile
+
+    output:
+    path "beagle_imputed.vcf.gz", emit: beagleVCF
+    path "beagle_imputed.vcf.gz.log"
+
+    script:
+    """
+    java -Xmx20g -jar ${params.beagleJarDir} \
+    gtgl=${vcfFile} \
+    out=${params.inputDir}/beagle_imputed \
+    map=${params.mapFile} \
+    gprobs=true
+    """
+}
+
 
 process popProject {
     errorStrategy 'retry'
@@ -432,10 +540,15 @@ process popProject {
     path fam
     
     output:
-    path '*.png'
-    path '*.pdf'
-    path '1000G_PC_projections.txt'
-    path 'PopAssignResults.txt'
+    path "*.png"
+    path "*.pdf"
+    path "1000G_PC_projections.txt"
+    path "PopAssignResults.txt"
+    
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.png'
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.pdf'
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '1000G_PC_projections.txt'
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: 'PopAssignResults.txt'
     
     script:
     """
@@ -444,13 +557,47 @@ process popProject {
     """
 }
 
+// process remainingSamples {
+//     errorStrategy 'retry'
+//     maxRetries 1
+
+//     time '4h'
+//     memory '12 GB'
+//     cpus 1
+
+//     input:
+
+
+//     output:
+//     file "sample_counts.txt"
+
+//     script:
+//     """
+//     # Initialize sample count file
+//     echo "" > sample_counts.txt
+
+//     # concatCHRFiles.output.sortedVCF
+//     # filterMissingSamples.output.bedFile
+//     # filterHetSamples.output.bedFile
+//     # filterLowAltFreq.output.lowAltFreqBedFile
+//     # filterRelated.output.bedFile
+
+//     plink2 --bfile ${plink2_data} --sample-counts cols=sid --out test
+//     wc -l test.scount | awk '{print $1-1}' >> output.txt
+
+//     # Get initial sample count from PLINK files
+//     plink --bfile ${bed} --fam --silent | awk '{print "Initial: " NR}' >> sample_counts.txt
+//     """
+// }
+
 workflow {
     concatCHRFiles(params.inputDir)
     splitMultiAllelicVariants(concatCHRFiles.output.sortedVCF)
     // filterMultiAllelicVariants(splitMultiAllelicVariants.output)
     fixGTAnnot(splitMultiAllelicVariants.output)
+    // createGraphs(params.testVCF)
     filterVariants(fixGTAnnot.output)
-    getMetrics(fixGTAnnot.output.unfilteredVCF, filterVariants.output.filteredVCF)
+    // getMetrics(fixGTAnnot.output.unfilteredVCF, filterVariants.output.filteredVCF)
     convertToPlinkFormat(filterVariants.output.filteredVCF)
     calculateMissingness(convertToPlinkFormat.output, fixGTAnnot.output)
     createHetFile(convertToPlinkFormat.output)
@@ -461,5 +608,8 @@ workflow {
     createMetricsFile(filterHetSamples.output)
     filterLowAltFreq(filterHetSamples.output)
     filterRelated(filterLowAltFreq.output)
+    convertBackToVCF(filterRelated.output.bedFile, filterRelated.output.bimFile, filterRelated.output.famFile)
+    runBeagle(convertBackToVCF.output.finalVCF)
+    convertToPlinkFormatAlt(runBeagle.output.beagleVCF)
     popProject(filterRelated.output.bedFile, filterRelated.output.bimFile, filterRelated.output.famFile)
 }
