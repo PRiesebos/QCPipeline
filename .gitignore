@@ -3,3 +3,6 @@
 /work/*
 nextflow.config
 .nextflow*
+*.sif
+bin/*/__pycache__/*
+bin/__pycache__/*
