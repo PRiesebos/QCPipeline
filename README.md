@@ -1,6 +1,6 @@
 # Quality Control pipeline for genotype data using Nextflow.
 
-Pipeline made in colleboration with Orfeas Gkourlias for my UMCG genetics department internship.
+Pipeline made in collaboration with Orfeas Gkourlias for my UMCG genetics department internship.
 
 ## This pipeline uses the following nextflow.config:
 ```
