@@ -3,3 +3,4 @@
 /work/*
 nextflow.config
 .nextflow*
+pub-rna-nocache_latest.sif

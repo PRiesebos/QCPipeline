@@ -15,6 +15,7 @@ def get_samples_with_low_missing_rate(file_path, threshold):
         # Skip header
         next(file)
         for line in file:
+            print(line)
             sample_data = line.strip().split('\t')
             sample_id = sample_data[1]
             missing_rate = float(sample_data[4])

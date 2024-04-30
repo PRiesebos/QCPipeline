@@ -1,6 +1,7 @@
 #!/usr/bin/Rscript
 # Author: Urmo Võsa
 # Edited by Joost Bakker
+# Further edited by Orfeas Gkourlias
 
 library(bigreadr)
 library(bigsnpr)
@@ -19,7 +20,9 @@ option_list <- list(
     make_option(c("--kin_file"), type = "character",
     help = "Path to plink kinship file."),
     make_option(c("--target_bed"), type = "character",
-    help = "Path to the target genotype file (bed/bim/fam format). Required file extension: .bed.")
+    help = "Path to the target genotype file (bed/bim/fam format). Required file extension: .bed."),
+    make_option(c("--out"), type = "character",
+    help = "Output path.")
     )
 
 # Create arg parser and pars args
@@ -88,7 +91,8 @@ if (length(related_individuals) > 0) {
 }
 
 # Write passed samples to file
-fileConn<-file("RelatednessPassedSamples.txt")
+
+fileConn<-file(paste(args$out, ".RelatednessPassedSamples.txt", sep=""))
 writeLines(passed_samples, fileConn)
 close(fileConn)
 
