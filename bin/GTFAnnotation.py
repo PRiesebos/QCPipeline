@@ -1,4 +1,7 @@
+#!/usr/bin/env python3
+
 import gzip
+import sys
 
 from features.feature import Feature
 from features.chromosome import Chromosome

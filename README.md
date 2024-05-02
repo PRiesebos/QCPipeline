@@ -12,7 +12,12 @@ process.container = "" // path to .sif container from: apptainer pull docker://o
 // Adjust the params to your usecase.
 params {
     inputDir = "" // path to the root folder of the output from the pub-rna pipeline. Link: https://github.com/ogkourlias/pub-rna
-    kingTableFilter = 0.04419417382
+    maf = 0.01 // minor allele frequency (MAF) threshold for filtering
+    geno = 0.05 // genotype call rate threshold for filtering
+    mind = 0.05 // minimum depth for genotype calling
+    hwe = 1e-6 // Hardy-Weinberg equilibrium (HWE) threshold for filtering
+    kingTableFilter = 0.04419417382 // kingTable treshold value for filtering
+    populationOutlierThreshold = 1 // population outlier treshold for filtering
     refPath = '' // path to the plink reference .bed file from 1000 genomes build 38
     refPop = '' // path to reference file sample population list. Link: https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/release/20130502/integrated_call_samples_v3.20130502.ALL.panel
     refAFs = '' // path to plink .afreq file of 1000 genomes
