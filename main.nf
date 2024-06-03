@@ -198,57 +198,12 @@ process getVariantAndSampleCount {
     path filterHetSamplesBim
     path filterLowAltFreqBim
     path filterRelatedBim
+    path targetPCABim
     path filterMissingSamplesFam
     path filterHetSamplesFam
     path filterLowAltFreqFam
     path filterRelatedFam
-
-    output:
-    path "variant_count.txt", emit: variantCount
-    path "sample_count.txt", emit: sampleCount
-
-    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '*.txt'
-
-    script:
-    """
-    # variant count file:
-    zcat ${fixGTAnnot} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count original:\t{}" > variant_count.txt
-    zcat ${splitMultiAllelicVariants} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count split:\t{}" >> variant_count.txt
-    zcat ${filterVariants} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count split:\t{}" >> variant_count.txt
-    wc -l ${filterMissingSamplesBim} | xargs -I {} echo -e "variant count missing:\t{}" >> variant_count.txt
-    wc -l ${filterHetSamplesBim} | xargs -I {} echo -e "variant count hetrozygosity:\t{}" >> variant_count.txt
-    wc -l ${filterLowAltFreqBim} | xargs -I {} echo -e "variant count low alt freq:\t{}" >> variant_count.txt
-    wc -l ${filterRelatedBim} | xargs -I {} echo -e "variant count filter related:\t{}" >> variant_count.txt
-
-    # sample count file:
-    zcat ${fixGTAnnot} | grep -m1 "^#CHROM" | cut -f 10- | tr "\t" "\n"  | wc -l | xargs -I {} echo -e "Sample count:\t{}" > sample_count.txt
-    wc -l ${filterMissingSamplesFam} | wc -l | xargs -I {} echo -e "Sample count missing:\t{}" >> sample_count.txt
-    wc -l ${filterHetSamplesFam} | xargs -I {} echo -e "Sample count hetrozygosity:\t{}" >> sample_count.txt
-    wc -l ${filterLowAltFreqFam} | xargs -I {} echo -e "Sample count low alt freq:\t{}" >> sample_count.txt
-    wc -l ${filterRelatedFam} | xargs -I {} echo -e "Sample count filter related:\t{}" >> sample_count.txt
-    """
-}
-
-process getVariantAndSampleCountTest {
-    errorStrategy 'retry'
-    maxRetries 1
-
-    time '4h'
-    memory '8 GB'
-    cpus 1
-
-    input:
-    path fixGTAnnot
-    path splitMultiAllelicVariants
-    path filterVariants
-    path filterMissingSamplesBim
-    path filterHetSamplesBim
-    path filterLowAltFreqBim
-    path filterRelatedBim
-    path filterMissingSamplesFam
-    path filterHetSamplesFam
-    path filterLowAltFreqFam
-    path filterRelatedFam
+    path targetPCAFam
 
     output:
     path "counts_summary.txt", emit: countsSummary
@@ -261,26 +216,28 @@ process getVariantAndSampleCountTest {
     tmp_file=\$(mktemp)
 
     # Calculate variant counts and store in temporary file
-    echo -e "variant count original\t\$(zcat ${fixGTAnnot} | grep -v '^#' | wc -l)\t" >> \$tmp_file
-    echo -e "variant count split (multi-allelic)\t\$(zcat ${splitMultiAllelicVariants} | grep -v '^#' | wc -l)\t" >> \$tmp_file
-    echo -e "variant count filtered\t\$(zcat ${filterVariants} | grep -v '^#' | wc -l)\t" >> \$tmp_file
-    echo -e "variant count missing\t\$(wc -l < ${filterMissingSamplesBim})\t" >> \$tmp_file
-    echo -e "variant count heterozygosity\t\$(wc -l < ${filterHetSamplesBim})\t" >> \$tmp_file
-    echo -e "variant count low alt freq\t\$(wc -l < ${filterLowAltFreqBim})\t" >> \$tmp_file
-    echo -e "variant count filter related\t\$(wc -l < ${filterRelatedBim})\t" >> \$tmp_file
+    echo -e "variant count original\t\$(zcat ${fixGTAnnot} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count split (multi-allelic)\t\$(zcat ${splitMultiAllelicVariants} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count filtered\t\$(zcat ${filterVariants} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count missing\t\$(wc -l < ${filterMissingSamplesBim})" >> \$tmp_file
+    echo -e "variant count heterozygosity\t\$(wc -l < ${filterHetSamplesBim})" >> \$tmp_file
+    echo -e "variant count low alt freq\t\$(wc -l < ${filterLowAltFreqBim})" >> \$tmp_file
+    echo -e "variant count filter related\t\$(wc -l < ${filterRelatedBim})" >> \$tmp_file
+    echo -e "variant count targetPCA\t\$(wc -l < ${targetPCABim})" >> \$tmp_file
 
     # Calculate sample counts and append to the temporary file
     sample_count=\$(zcat ${fixGTAnnot} | grep -m1 "^#CHROM" | cut -f 10- | tr "\\t" "\\n" | wc -l)
-    echo -e "sample count original\t\t\$sample_count" >> \$tmp_file
-    echo -e "sample count split\t\t\$sample_count" >> \$tmp_file
-    echo -e "sample count filtered\t\t\$sample_count" >> \$tmp_file
-    echo -e "sample count missing\t\t\$(wc -l < ${filterMissingSamplesFam})" >> \$tmp_file
-    echo -e "sample count heterozygosity\t\t\$(wc -l < ${filterHetSamplesFam})" >> \$tmp_file
-    echo -e "sample count low alt freq\t\t\$(wc -l < ${filterLowAltFreqFam})" >> \$tmp_file
-    echo -e "sample count filter related\t\t\$(wc -l < ${filterRelatedFam})" >> \$tmp_file
+    echo -e "sample count original\t\$sample_count" >> \$tmp_file
+    echo -e "sample count split\t\$sample_count" >> \$tmp_file
+    echo -e "sample count filtered\t\$sample_count" >> \$tmp_file
+    echo -e "sample count missing\t\$(wc -l < ${filterMissingSamplesFam})" >> \$tmp_file
+    echo -e "sample count heterozygosity\t\$(wc -l < ${filterHetSamplesFam})" >> \$tmp_file
+    echo -e "sample count low alt freq\t\$(wc -l < ${filterLowAltFreqFam})" >> \$tmp_file
+    echo -e "sample count filter related\t\$(wc -l < ${filterRelatedFam})" >> \$tmp_file
+    echo -e "sample count targetPCA\t\$(wc -l < ${targetPCAFam})" >> \$tmp_file
 
-    # Combine the counts into the final summary file
-    awk 'BEGIN {FS="\t"; OFS="\t"} {print \$1, \$2, (\$3=="" ? \$2 : \$3)}' \$tmp_file > counts_summary.txt
+    # Create the final summary file with two columns
+    awk 'BEGIN {FS="\t"; OFS="\t"} {print \$1, \$2}' \$tmp_file > counts_summary.txt
 
     # Remove the temporary file
     rm -f \$tmp_file
@@ -312,7 +269,7 @@ process convertToPlinkFormat {
 
 
 process convertToPlinkFormatAlt {
-    storeDir "${params.inputDir}/final_beagle"
+    // storeDir "${params.inputDir}/final_beagle"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -330,7 +287,7 @@ process convertToPlinkFormatAlt {
 
     script:
     """
-    mkdir -p ${params.inputDir}/final_beagle
+    # mkdir -p ${params.inputDir}/final_beagle
     plink2 --vcf ${vcf} --make-bed --out beagle_imputed
     """
 }
@@ -546,7 +503,7 @@ process filterLowAltFreq {
 }
 
 process filterRelated {
-    storeDir "${params.inputDir}/final"
+    // storeDir "${params.inputDir}/final"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -858,9 +815,9 @@ workflow {
     convertBackToVCF(filterRelated.output.bed, filterRelated.output.bim, filterRelated.output.fam)
     runBeagle(convertBackToVCF.output.finalVcf)
     convertToPlinkFormatAlt(runBeagle.output.beagleVcf)
-    popProject(filterRelated.output.bed, filterRelated.output.bim, filterRelated.output.fam)
-    getVariantAndSampleCountTest(fixGTAnnot.output.gtFixedVcf, splitMultiAllelicVariants.output.splitVcf, filterVariants.output.filteredVcf, filterMissingSamples.output.bim, filterHetSamples.output.bim, filterLowAltFreq.output.bim, filterRelated.output.bim, filterMissingSamples.output.fam, filterHetSamples.output.fam, filterLowAltFreq.output.fam, filterRelated.output.fam)
-    // popProjectAfterBeagle(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam)
-    // targetPCA(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam)
+    // popProject(filterRelated.output.bed, filterRelated.output.bim, filterRelated.output.fam)
+    popProjectAfterBeagle(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam)
+    targetPCA(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam)
+    getVariantAndSampleCount(fixGTAnnot.output.gtFixedVcf, splitMultiAllelicVariants.output.splitVcf, filterVariants.output.filteredVcf, filterMissingSamples.output.bim, filterHetSamples.output.bim, filterLowAltFreq.output.bim, filterRelated.output.bim, targetPCA.output.bim , filterMissingSamples.output.fam, filterHetSamples.output.fam, filterLowAltFreq.output.fam, filterRelated.output.fam, targetPCA.output.fam)
     // finalPCA(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam)  
 }
