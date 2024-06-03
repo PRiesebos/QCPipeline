@@ -38,7 +38,10 @@ class VcfStat:
             + "maf_type\t"
             + "gq\t"
             + "ref_freq\t"
-            + "alt_freq\n"        
+            + "alt_freq\t"
+            + "af_info\t"
+            + "maf_info\t"
+            + "r2_info\n"        
         )
         
     def walk(self):
@@ -79,7 +82,7 @@ class VcfStat:
         # Zip to iterate over both record values and track index.
         for i, entry in enumerate(variant):
             match i:  # Match the index value.
-                case 0 | 1 | 2 | 5 | 7:  # Values on these indexes are not relevant.
+                case 0 | 1 | 2 | 5 :  # Values on these indexes are not relevant.
                     continue
                 
                 case 3 | 4:  # Check whether ref or alt contains an indel.
@@ -88,6 +91,14 @@ class VcfStat:
                 
                 case 6:
                     gq = entry
+                
+                case 7:
+                    if len(entry.split(";")) > 1: 
+                        af_info = entry.split(";")[0].split("=")[1]
+                        maf_info = entry.split(";")[1].split("=")[1]
+                        r2_info = entry.split(";")[2].split("=")[1]
+                    else:
+                        af_info, maf_info, r2_info = "nan"
 
                 case 8:  # Initialse the format column indicators/headers.
                     val_dict = {}
@@ -106,7 +117,7 @@ class VcfStat:
 
                     # Save genotypes in seperate var.
                     gt = val_dict["GT"]
-                    ad = val_dict["AD"]
+                    # ad = val_dict["AD"]
 
                     if "." in gt:
                         missing += 1
@@ -146,7 +157,10 @@ class VcfStat:
             f"{maf_type}\t"
             f"{gq}\t"
             f"{a_freq}\t"
-            f"{b_freq}\n"
+            f"{b_freq}\t"
+            f"{af_info}\t"
+            f"{maf_info}\t"
+            f"{r2_info}\n"
         )
 
     def calc_maf(self, nr_aa, nr_ab, nr_bb):
