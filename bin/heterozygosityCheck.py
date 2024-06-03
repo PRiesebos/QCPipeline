@@ -25,8 +25,8 @@ def main(input_file, output_folder):
     # Return samples that deviate too much from the mean. To be thrown away.
     het_fail_samples = het[(het["Het_Rate"] < mean_het_rate - 3 * std_dev_het_rate) | (het["Het_Rate"] > mean_het_rate + 3 * std_dev_het_rate)]
     het_fail_samples_only = het_fail_samples["#IID"]
-    het_fail_samples.to_csv(output_folder + '/qc_logs/HeterozygosityFailed.txt', sep='\t', index=False)
-    het_fail_samples_only.to_csv(output_folder + '/qc_logs/HeterozygosityFailedSamplesOnly.txt', sep='\t', index=False, header=None)
+    het_fail_samples.to_csv(output_folder + 'HeterozygosityFailed.txt', sep='\t', index=False)
+    het_fail_samples_only.to_csv(output_folder + 'HeterozygosityFailedSamplesOnly.txt', sep='\t', index=False, header=None)
 
     # Plot histogram
     plt.figure(figsize=(10, 6), facecolor="white")
@@ -45,7 +45,7 @@ def main(input_file, output_folder):
 
     # Save the plot
     plt.grid(True)
-    plt.savefig(output_folder + '/figures/HetCheck.png', bbox_inches='tight')
+    plt.savefig(output_folder + 'HetCheck.png', bbox_inches='tight')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Process heterozygosity data and plot histogram.')

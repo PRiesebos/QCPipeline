@@ -112,6 +112,9 @@ class get_region:
                 + "gq\t"
                 + "ref_freq\t"
                 + "alt_freq\t"
+                + "af_info\t"
+                + "maf_info\t"
+                + "r2_info\t"    
                 + "gene_types\t"
                 + "transcripts\t"
                 + "exons\t"
@@ -125,7 +128,7 @@ class get_region:
                 for row in spamreader:
                     variant = row
                     pos = int(variant[0].split(":")[1])
-                    chr_str = str(variant[0].split(":")[0][3:])
+                    chr_str = str(variant[0].split(":")[0].replace("chr", ""))
                     chrom = Chromosome.parse(chr_str)
                     genes = self.genes_by_chr[chrom]
                     overlapGenes = []

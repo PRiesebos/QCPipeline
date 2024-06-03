@@ -1,8 +1,8 @@
 """
 File:         main.nf
 Created:      2024/04/11
-Last Changed: 2024/04/25
-Author:       Peter Riesebos & Orfeas Gkourlias
+Last Changed: 2024/06/03
+Authors:      Peter Riesebos & Orfeas Gkourlias
 """
 
 nextflow.enable.dsl=2
@@ -12,24 +12,58 @@ process concatCHRFiles {
     maxRetries 1
 
     time '4h'
+    memory '4 GB'
+    cpus 1
+
+    input:
+    path vcfsPath
+
+    output:
+    path "sorted_merged_output.vcf.gz", emit: sortedVcf
+
+    script:
+    """
+    mkdir -p ${params.inputDir}/figures
+    mkdir -p ${params.inputDir}/qc_logs
+
+    # hardcoded concat step so sorting isn't needed
+    bcftools concat \
+    ${vcfsPath}/chr1.*vcf.gz ${vcfsPath}/chr2.*vcf.gz ${vcfsPath}/chr3.*vcf.gz ${vcfsPath}/chr4.*vcf.gz \
+    ${vcfsPath}/chr5.*vcf.gz ${vcfsPath}/chr6.*vcf.gz ${vcfsPath}/chr7.*vcf.gz ${vcfsPath}/chr8.*vcf.gz \
+    ${vcfsPath}/chr9.*vcf.gz ${vcfsPath}/chr10.*vcf.gz ${vcfsPath}/chr11.*vcf.gz ${vcfsPath}/chr12.*vcf.gz \
+    ${vcfsPath}/chr13.*vcf.gz ${vcfsPath}/chr14.*vcf.gz ${vcfsPath}/chr15.*vcf.gz ${vcfsPath}/chr16.*vcf.gz \
+    ${vcfsPath}/chr17.*vcf.gz ${vcfsPath}/chr18.*vcf.gz ${vcfsPath}/chr19.*vcf.gz ${vcfsPath}/chr20.*vcf.gz \
+    ${vcfsPath}/chr21.*vcf.gz ${vcfsPath}/chr22.*vcf.gz \
+    -Oz -o sorted_merged_output.vcf.gz
+
+    # Original steps: 
+    # bcftools concat ${vcfsPath}/chr*.vcf.gz -Oz -o ${vcfsPath.SimpleName}.concat.vcf.gz
+    # bcftools sort ${vcfsPath.SimpleName}.concat.vcf.gz -Oz -o ${vcfsPath.SimpleName}.sorted.concat.vcf.gz
+    """
+}
+
+
+process fixGTAnnot {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
     memory '8 GB'
     cpus 1
 
     input:
-    path vcfFilesPath
+    path vcf
 
     output:
-    path "merged_output.vcf.gz"
-    path "sorted_merged_output.vcf.gz", emit: sortedVCF
+    path "${vcf.SimpleName}.gtfixed.sorted.concat.vcf.gz", emit: gtFixedVcf
 
     script:
     """
-    mkdir -p ${params.inputDir}/qc_logs
-    mkdir -p ${params.inputDir}/figures
-    bcftools concat ${vcfFilesPath}/chr*.vcf.gz -Oz -o merged_output.vcf.gz
-    bcftools sort merged_output.vcf.gz -Oz -o sorted_merged_output.vcf.gz
+    # 1. fix GT field annotation
+     dotrevive.py -i ${vcf} -o ${vcf.SimpleName}.gtfixed.sorted.concat.vcf.gz
     """
 }
+
 
 process splitMultiAllelicVariants {
     errorStrategy 'retry'
@@ -40,16 +74,17 @@ process splitMultiAllelicVariants {
     cpus 1
 
     input:
-    path vcfFilesPath
+    path vcf
 
     output:
-    path "split_sorted_merged_output.vcf.gz"
+    path "${vcf.SimpleName}.split.gtfixed.sorted.concat.vcf.gz", emit: splitVcf
 
     script:
     """
-    bcftools norm -m -any ${vcfFilesPath} -Oz -o split_sorted_merged_output.vcf.gz
+    bcftools norm -m -any ${vcf} -Oz -o ${vcf.SimpleName}.split.gtfixed.sorted.concat.vcf.gz
     """
 }
+
 
 // process filterMultiAllelicVariants {
 //     errorStrategy 'retry'
@@ -71,27 +106,6 @@ process splitMultiAllelicVariants {
 //     """
 // }
 
-process fixGTAnnot {
-    storeDir "${params.inputDir}"
-    errorStrategy 'retry'
-    maxRetries 1
-
-    time '4h'
-    memory '8 GB'
-    cpus 1
-
-    input:
-    path vcfFilesPath
-
-    output:
-    path "no_multi_allelic_dotrevive.vcf.gz", emit: unfilteredVCF
-
-    script:
-    """
-    # 1. fix GT field annotation
-    python3 ${projectDir}/bin/dotrevive.py -i ${vcfFilesPath} -o no_multi_allelic_dotrevive.vcf.gz
-    """
-}
 
 process createGraphs {
     storeDir "${params.inputDir}"
@@ -103,7 +117,7 @@ process createGraphs {
     cpus 1
 
     input:
-    path testVCF
+    path vcf
 
     output:
     path "*stats.tsv.gz"
@@ -111,25 +125,23 @@ process createGraphs {
     path "*rates.png"
     path "*freqs.png"
 
-    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*rates.png'
-    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*freqs.png'
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.png'
 
     script:
     """
     # 1 run vcf_stats.py
-    python3 ${projectDir}/bin/vcf_stats.py -i ${testVCF} -o output_stats.tsv.gz
+    vcf_stats.py -i ${vcf} -o output_stats.tsv.gz
     
     # 2 run regions.py
-    python3 ${projectDir}/bin/get_region.py -all -i output_stats.tsv.gz -g ${params.annotationGTF} -o output_stats_regions.tsv.gz
+    get_region.py -all -i output_stats.tsv.gz -g ${params.annotationGTF} -o output_stats_regions.tsv.gz
 
     # 3 run graph_summary.
-    Rscript ${projectDir}/bin/graph_summary.R output_stats_regions.tsv.gz
+    graph_summary.R output_stats_regions.tsv.gz
     """
 }
 
 
 process filterVariants {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -138,18 +150,18 @@ process filterVariants {
     cpus 1
 
     input:
-    path vcfFile
+    path vcf
 
     output:
-    path "no_multi_allelic_dotrevive-filtered.vcf.gz", emit: filteredVCF
-    path "no_multi_allelic_dotrevive-filtered.log.gz"
+    path "${vcf.SimpleName}.filtered.vcf.gz", emit: filteredVcf
+    path "${vcf.SimpleName}.filtered.log.gz", emit: filteredLog
 
     script:
     """
     # 1. Define command arguments
-    commandArguments="--input ${vcfFile} \
+    commandArguments="--input ${vcf} \
     --output no_multi_allelic \
-    --call_rate 0.5 \
+    --call_rate ${params.callRate} \
     --filtered_depth 5 \
     --genotype_quality 10 \
     --minor_allele_frequency 0.01 \
@@ -158,15 +170,19 @@ process filterVariants {
     --remove_non_pass_snv \
     --remove_non_pass_indel \
     --replace_poor_quality_genotypes \
-    --output ${params.inputDir}/no_multi_allelic_dotrevive"
+    --output ${vcf.SimpleName}"
 
     # 2. Run the custom VCF filter script
-    python3 ${projectDir}/bin/custom_vcf_filter.py \${commandArguments} \
+    custom_vcf_filter.py \${commandArguments} \
     | tee ${params.inputDir}/qc_logs/custom_vcf_filter.log
+
+    mv ${vcf.SimpleName}-filtered.vcf.gz ${vcf.SimpleName}.filtered.vcf.gz
+    mv ${vcf.SimpleName}-filtered.log.gz ${vcf.SimpleName}.filtered.log.gz
     """
 }
 
-process getMetrics {
+
+process getVariantAndSampleCount {
     errorStrategy 'retry'
     maxRetries 1
 
@@ -175,18 +191,118 @@ process getMetrics {
     cpus 1
 
     input:
-    path unfilteredVCF
-    path filteredVCF
+    path fixGTAnnot
+    path splitMultiAllelicVariants
+    path filterVariants
+    path filterMissingSamplesBim
+    path filterHetSamplesBim
+    path filterLowAltFreqBim
+    path filterRelatedBim
+    path targetPCABim
+    path filterMissingSamplesFam
+    path filterHetSamplesFam
+    path filterLowAltFreqFam
+    path filterRelatedFam
+    path targetPCAFam
 
-    // output:
-    // path "qc_logs/variant_count.txt", emit: variantCount
+    output:
+    path "counts_summary.txt", emit: countsSummary
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '*.txt'
 
     script:
     """
-    zcat ${unfilteredVCF} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count:\t{}" > ${params.inputDir}/qc_logs/variant_count.txt
-    zcat ${filteredVCF} | grep -v '^#' | wc -l | xargs -I {} echo -e "variant count filtered:\t{}" >> ${params.inputDir}/qc_logs/variant_count.txt
+    # Create a temporary file to hold the counts
+    tmp_file=\$(mktemp)
+
+    # Calculate variant counts and store in temporary file
+    echo -e "variant count original\t\$(zcat ${fixGTAnnot} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count split (multi-allelic)\t\$(zcat ${splitMultiAllelicVariants} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count filtered\t\$(zcat ${filterVariants} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count missing\t\$(wc -l < ${filterMissingSamplesBim})" >> \$tmp_file
+    echo -e "variant count heterozygosity\t\$(wc -l < ${filterHetSamplesBim})" >> \$tmp_file
+    echo -e "variant count low alt freq\t\$(wc -l < ${filterLowAltFreqBim})" >> \$tmp_file
+    echo -e "variant count filter related\t\$(wc -l < ${filterRelatedBim})" >> \$tmp_file
+    echo -e "variant count targetPCA\t\$(wc -l < ${targetPCABim})" >> \$tmp_file
+
+    # Calculate sample counts and append to the temporary file
+    sample_count=\$(zcat ${fixGTAnnot} | grep -m1 "^#CHROM" | cut -f 10- | tr "\\t" "\\n" | wc -l)
+    echo -e "sample count original\t\$sample_count" >> \$tmp_file
+    echo -e "sample count split\t\$sample_count" >> \$tmp_file
+    echo -e "sample count filtered\t\$sample_count" >> \$tmp_file
+    echo -e "sample count missing\t\$(wc -l < ${filterMissingSamplesFam})" >> \$tmp_file
+    echo -e "sample count heterozygosity\t\$(wc -l < ${filterHetSamplesFam})" >> \$tmp_file
+    echo -e "sample count low alt freq\t\$(wc -l < ${filterLowAltFreqFam})" >> \$tmp_file
+    echo -e "sample count filter related\t\$(wc -l < ${filterRelatedFam})" >> \$tmp_file
+    echo -e "sample count targetPCA\t\$(wc -l < ${targetPCAFam})" >> \$tmp_file
+
+    # Create the final summary file with two columns
+    awk 'BEGIN {FS="\t"; OFS="\t"} {print \$1, \$2}' \$tmp_file > counts_summary.txt
+
+    # Remove the temporary file
+    rm -f \$tmp_file
     """
 }
+
+
+process getVariantAndSampleCountNoTargetPCA {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '8 GB'
+    cpus 1
+
+    input:
+    path fixGTAnnot
+    path splitMultiAllelicVariants
+    path filterVariants
+    path filterMissingSamplesBim
+    path filterHetSamplesBim
+    path filterLowAltFreqBim
+    path filterRelatedBim
+    path filterMissingSamplesFam
+    path filterHetSamplesFam
+    path filterLowAltFreqFam
+    path filterRelatedFam
+
+    output:
+    path "counts_summary.txt", emit: countsSummary
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '*.txt'
+
+    script:
+    """
+    # Create a temporary file to hold the counts
+    tmp_file=\$(mktemp)
+
+    # Calculate variant counts and store in temporary file
+    echo -e "variant count original\t\$(zcat ${fixGTAnnot} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count split (multi-allelic)\t\$(zcat ${splitMultiAllelicVariants} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count filtered\t\$(zcat ${filterVariants} | grep -v '^#' | wc -l)" >> \$tmp_file
+    echo -e "variant count missing\t\$(wc -l < ${filterMissingSamplesBim})" >> \$tmp_file
+    echo -e "variant count heterozygosity\t\$(wc -l < ${filterHetSamplesBim})" >> \$tmp_file
+    echo -e "variant count low alt freq\t\$(wc -l < ${filterLowAltFreqBim})" >> \$tmp_file
+    echo -e "variant count filter related\t\$(wc -l < ${filterRelatedBim})" >> \$tmp_file
+
+    # Calculate sample counts and append to the temporary file
+    sample_count=\$(zcat ${fixGTAnnot} | grep -m1 "^#CHROM" | cut -f 10- | tr "\\t" "\\n" | wc -l)
+    echo -e "sample count original\t\$sample_count" >> \$tmp_file
+    echo -e "sample count split\t\$sample_count" >> \$tmp_file
+    echo -e "sample count filtered\t\$sample_count" >> \$tmp_file
+    echo -e "sample count missing\t\$(wc -l < ${filterMissingSamplesFam})" >> \$tmp_file
+    echo -e "sample count heterozygosity\t\$(wc -l < ${filterHetSamplesFam})" >> \$tmp_file
+    echo -e "sample count low alt freq\t\$(wc -l < ${filterLowAltFreqFam})" >> \$tmp_file
+    echo -e "sample count filter related\t\$(wc -l < ${filterRelatedFam})" >> \$tmp_file
+
+    # Create the final summary file with two columns
+    awk 'BEGIN {FS="\t"; OFS="\t"} {print \$1, \$2}' \$tmp_file > counts_summary.txt
+
+    # Remove the temporary file
+    rm -f \$tmp_file
+    """
+}
+
 
 process convertToPlinkFormat {
     errorStrategy 'retry'
@@ -197,21 +313,22 @@ process convertToPlinkFormat {
     cpus 1
 
     input:
-    path vcfFile
+    path vcf
 
     output:
-    path "*.bed", emit: bedFile
-    path "*.bim", emit: bimFile
-    path "*.fam", emit: famFile
+    path "*.bed", emit: bed
+    path "*.bim", emit: bim
+    path "*.fam", emit: fam
 
     script:
     """
-    plink2 --vcf ${vcfFile} --make-bed
+    plink2 --vcf ${vcf} --make-bed
     """
 }
+
 
 process convertToPlinkFormatAlt {
-    storeDir "${params.inputDir}"
+    storeDir "${params.inputDir}/final_beagle"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -220,21 +337,23 @@ process convertToPlinkFormatAlt {
     cpus 1
 
     input:
-    path vcfFile
+    path vcf
 
     output:
-    path "*.bed", emit: bedFile
-    path "*.bim", emit: bimFile
-    path "*.fam", emit: famFile
+    path "*.bed", emit: bed
+    path "*.bim", emit: bim
+    path "*.fam", emit: fam
 
     script:
     """
-    plink2 --vcf ${vcfFile} --make-bed --out beagle_imputed
+    # mkdir -p ${params.inputDir}/final_beagle
+    plink2 --vcf ${vcf} --make-bed --out beagle_imputed
     """
 }
+
 
 process calculateMissingness {
-    storeDir "${params.inputDir}"
+    storeDir "${params.inputDir}/qc_logs"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -243,25 +362,27 @@ process calculateMissingness {
     cpus 1
 
     input:
-    path bedFile
-    path bimFile
-    path famFile
-    path vcfFile
+    path bed
+    path bim
+    path fam
+    path vcf
 
     output:
-    path "PRE_FILTER.smiss"
-    path "POST_FILTER.smiss", emit: missingFile
+    path "${vcf.SimpleName}.preFilter.smiss"
+    path "${vcf.SimpleName}.postFilter.smiss", emit: missing
+    path "${vcf.SimpleName}.preFilter.vmiss"
+    path "${vcf.SimpleName}.postFilter.vmiss"
 
     script:
     """
-    plink2 --vcf ${vcfFile} --missing --out PRE_FILTER
-    plink2 --bfile plink2 --missing --out POST_FILTER
+    plink2 --vcf ${vcf} --missing --out ${vcf.SimpleName}.preFilter
+    plink2 --bfile ${bed.SimpleName} --missing --out ${vcf.SimpleName}.postFilter
     """
 }
 
-// if less than 50 samples use --bad-freqs. Needs an alternative solution?
+
 process createHetFile {
-    storeDir "${params.inputDir}"
+    storeDir "${params.inputDir}/qc_logs"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -270,22 +391,21 @@ process createHetFile {
     cpus 1
 
     input:
-    path bedFile
-    path bimFile
-    path famFile
+    path bed
+    path bim
+    path fam
 
     output:
     path "*.het"
 
     script:
     """
-    plink2 --bfile plink2 --het cols=hom,het,nobs,f --bad-freqs --out heterozygosity_output
+    plink2 --bfile ${bed.SimpleName} --het cols=hom,het,nobs,f --bad-freqs --out heterozygosity_output
     """
 }
 
-// Create a txt file with samples where missingness => 50%
+
 process findMissingSamples {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -297,15 +417,18 @@ process findMissingSamples {
     path smiss
 
     output:
-    path 'qc_logs/filtered_samples.txt', emit: filteredSamplesFile
+    path "${smiss.SimpleName}-filtered-samples.txt", emit: filteredSamples
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'copy', pattern: '*.txt'
 
     script:
     """
-    python ${projectDir}/bin/filterMissingness.py ${smiss} ${params.inputDir}/qc_logs/filtered_samples.txt --threshold 0.5
+    filterMissingness.py ${smiss} ${smiss.SimpleName}-filtered-samples.txt --threshold 0.5
+    # sleep 10s
     """
 }
 
-// Filter these samples. Output -> filtered plink files
+
 process filterMissingSamples {
     errorStrategy 'retry'
     maxRetries 1
@@ -315,24 +438,24 @@ process filterMissingSamples {
     cpus 1
 
     input:
-    path filteredSamplesFile
-    path bedFile
-    path bimFile
-    path famFile
+    path filteredSamples
+    path bed
+    path bim
+    path fam
 
     output:
-    path 'data_keep.bed', emit: bedFile
-    path 'data_keep.bim', emit: bimFile
-    path 'data_keep.fam', emit: famFile
+    path "${bed.SimpleName}.keep.bed", emit: bed
+    path "${bed.SimpleName}.keep.bim", emit: bim
+    path "${bed.SimpleName}.keep.fam", emit: fam
 
     script:
     """
-    plink2 --bfile plink2 --keep ${filteredSamplesFile} --make-bed --out data_keep
+    plink2 --bfile ${bed.SimpleName} --keep ${filteredSamples} --make-bed --out ${bed.SimpleName}.keep
     """
 }
 
+
 process findHetSamples {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -344,15 +467,19 @@ process findHetSamples {
     path het_file
 
     output:
-    path "figures/*.png"
-    path "qc_logs/*Failed.txt"
-    path "qc_logs/*FailedSamplesOnly.txt", emit: failedHetSamples
+    path "*.png"
+    path "*Failed.txt"
+    path "*FailedSamplesOnly.txt", emit: failedHetSamples
+
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.png'
+    publishDir "${params.inputDir}/qc_logs", mode: 'copy', pattern: '*.txt'
 
     script:
     """
-    python3 ${projectDir}/bin/heterozygosityCheck.py ${het_file} ${params.inputDir}
+    heterozygosityCheck.py ${het_file} ./
     """
 }
+
 
 process filterHetSamples {
     errorStrategy 'retry'
@@ -364,26 +491,26 @@ process filterHetSamples {
 
     input:
     path failedHetSamples
-    path bedFile
-    path bimFile
-    path famFile
+    path bed
+    path bim
+    path fam
 
     output:
-    path 'output.bed', emit: bedFile
-    path 'output.bim', emit: bimFile
-    path 'output.fam', emit: famFile
+    path "${bed.SimpleName}.bed", emit: bed
+    path "${bed.SimpleName}.bim", emit: bim
+    path "${bed.SimpleName}.fam", emit: fam
 
     script:
     """
-    plink2 --bfile data_keep \
+    plink2 --bfile ${bed.SimpleName}.keep \
        --remove ${failedHetSamples} \
        --make-bed \
-       --out output
+       --out ${bed.SimpleName}
     """
 }
 
+
 process createMetricsFile {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -392,16 +519,18 @@ process createMetricsFile {
     cpus 1
 
     input:
-    path bedFile
-    path bimFile
-    path famFile
+    path bed
+    path bim
+    path fam
 
     output:
-    path "qc_logs/metrics_matrix.tsv", emit: metrics_matrix
+    path "metrics_matrix.tsv", emit: metrics_matrix
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '*.tsv'
 
     script:
     """
-    python3 ${projectDir}/bin/CombineQCFiles.py ${params.inputDir} ${params.inputDir}/qc_logs/metrics_matrix.tsv
+    CombineQCFiles.py ${params.inputDir} metrics_matrix.tsv
     """
 }
 
@@ -421,8 +550,8 @@ process filterLowAltFreq {
 
     output:
     path "${bed.SimpleName}.over10.bed", emit: lowAltFreqBedFile
-    path "${bed.SimpleName}.over10.bim"
-    path "${bed.SimpleName}.over10.fam"
+    path "${bed.SimpleName}.over10.bim", emit: bim
+    path "${bed.SimpleName}.over10.fam", emit: fam
     
     script:
     """
@@ -433,7 +562,7 @@ process filterLowAltFreq {
 }
 
 process filterRelated {
-    storeDir "${params.inputDir}"
+    // storeDir "${params.inputDir}/final"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -447,9 +576,9 @@ process filterRelated {
     path fam
 
     output:
-    path 'RelatednessCheck.bed', emit: bedFile
-    path 'RelatednessCheck.bim', emit: bimFile
-    path 'RelatednessCheck.fam', emit: famFile
+    path 'RelatednessCheck.bed', emit: bed
+    path 'RelatednessCheck.bim', emit: bim
+    path 'RelatednessCheck.fam', emit: fam
     path 'related.kin0'
     path 'RelatednessPassedSamples.txt'
 
@@ -457,6 +586,7 @@ process filterRelated {
 
     script:
     """
+    mkdir -p ${params.inputDir}/final
     # 1. Do relatedness check
     plink2 --bfile ${bed.SimpleName}.over10 \
         --make-king-table \
@@ -491,16 +621,15 @@ process convertBackToVCF {
     path fam
 
     output:
-    path "final.vcf.gz", emit: finalVCF
+    path "final.vcf.gz", emit: finalVcf
 
     script:
     """
-    plink2 --bed ${bed} --bim ${bim} --fam ${fam} --export vcf-4.2 bgz --out final
+    plink2 --bed ${bed} --bim ${bim} --fam ${fam} --export vcf-4.2 bgz --set-all-var-ids '@:#:\$r:\$a' --new-id-max-allele-len 1000 --out final
     """
 }
 
 process runBeagle {
-    storeDir "${params.inputDir}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -512,14 +641,18 @@ process runBeagle {
     path vcfFile
 
     output:
-    path "beagle_imputed.vcf.gz", emit: beagleVCF
-    path "beagle_imputed.vcf.gz.log"
+    path "beagle_imputed.vcf.gz", emit: beagleVcf
+    path "beagle_imputed.log"
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'copy', pattern: '*.log'
+    publishDir "${params.inputDir}", mode: 'copy', pattern: '*.gz'
+
 
     script:
     """
     java -Xmx20g -jar ${params.beagleJarDir} \
     gtgl=${vcfFile} \
-    out=${params.inputDir}/beagle_imputed \
+    out=beagle_imputed \
     map=${params.mapFile} \
     gprobs=true
     """
@@ -545,10 +678,8 @@ process popProject {
     path "1000G_PC_projections.txt"
     path "PopAssignResults.txt"
     
-    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.png'
-    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.pdf'
-    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '1000G_PC_projections.txt'
-    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: 'PopAssignResults.txt'
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.{pdf,png}'
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '*.txt'
     
     script:
     """
@@ -557,59 +688,196 @@ process popProject {
     """
 }
 
-// process remainingSamples {
-//     errorStrategy 'retry'
-//     maxRetries 1
 
-//     time '4h'
-//     memory '12 GB'
-//     cpus 1
+process popProjectAfterBeagle {
+    errorStrategy 'retry'
+    maxRetries 1
 
-//     input:
+    time '4h'
+    memory '24 GB'
+    cpus 4
+
+    input:
+    path bed
+    path bim
+    path fam
+    
+    output:
+    path "*.png"
+    path "*.pdf"
+    path "1000G_PC_projections.txt"
+    path "PopAssignResults.txt"
+    
+    publishDir "${params.inputDir}/after_beagle_pop", mode: 'move', pattern: '*.{pdf,png}'
+    publishDir "${params.inputDir}/after_beagle_pop", mode: 'move', pattern: '*.txt'
+    
+    script:
+    """
+    mkdir -p ${params.inputDir}/after_beagle_pop
+    project_samples_to_superpop.R --ref_bed ${params.refPath} \
+        --target_bed ${bed} --ref_pop ${params.refPop}
+    """
+}
+
+// Needs fixing, doesn't properly filter pc outliers based on ancestry
+process targetPCA {
+    storeDir "${params.inputDir}/final"
+
+    time '6h'
+    memory '16 GB'
+    cpus 1
+
+    input:
+    path bed
+    path bim
+    path fam
+
+    output:
+    path "${bed.SimpleName}.toImputation.bed", emit: bed
+    path "${bed.SimpleName}.toImputation.bim", emit: bim
+    path "${bed.SimpleName}.toImputation.fam", emit: fam
+    path "${bed.SimpleName}.SamplesToInclude.txt", emit: sampleFile
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'copy', pattern: '*.txt'
+
+    script:
+    """
+    mkdir -p ${params.inputDir}/final
+    # 1. Do PCA and find outliers
+    target_pca.R --target_bed ${bed} --outlier_threshold ${params.populationOutlierThreshold} --out ${bed.SimpleName}
+    # 2. Remove outlier samples
+    plink2 --bed ${bed} \
+        --bim ${bim} \
+        --fam ${fam} \
+        --output-chr 26 \
+        --keep ${bed.SimpleName}.SamplesToInclude.txt \
+        --make-bed \
+        --threads 4 \
+        --out ${bed.SimpleName}.toImputation
+    """
+}
 
 
-//     output:
-//     file "sample_counts.txt"
+process finalSNPandGenotypeQC {
+    time '6h'
+    memory '8 GB'
+    cpus 1
 
-//     script:
-//     """
-//     # Initialize sample count file
-//     echo "" > sample_counts.txt
+    input:
+    path bed
+    path bim
+    path fam
 
-//     # concatCHRFiles.output.sortedVCF
-//     # filterMissingSamples.output.bedFile
-//     # filterHetSamples.output.bedFile
-//     # filterLowAltFreq.output.lowAltFreqBedFile
-//     # filterRelated.output.bedFile
+    output:
+    path "${bed.SimpleName}.bed"
+    path "${bed.SimpleName}.bim"
+    path "${bed.SimpleName}.fam"
 
-//     plink2 --bfile ${plink2_data} --sample-counts cols=sid --out test
-//     wc -l test.scount | awk '{print $1-1}' >> output.txt
+    publishDir "${params.inputDir}/final_snp_qc/", mode: 'move'
 
-//     # Get initial sample count from PLINK files
-//     plink --bfile ${bed} --fam --silent | awk '{print "Initial: " NR}' >> sample_counts.txt
-//     """
-// }
+    script:
+    """
+    mkdir -p ${params.inputDir}/final_snp_qc/
+    plink2 --bed ${bed} \
+        --bim ${bim} \
+        --fam ${fam} \
+        --maf ${params.maf} \
+        --geno ${params.geno} \
+        --mind ${params.mind} \
+        --hwe ${params.hwe} \
+        --autosome \
+        --make-bed \
+        --out chrAll_QC \
+        --output-chr 26 \
+        --not-chr 0 25-26 \
+        --set-all-var-ids @:#[b38]\\\$r,\\\$a \
+        --new-id-max-allele-len 10 truncate \
+        --threads 4
+    """
+}
+
+process finalPCA {
+    time '6h'
+    memory '16 GB'
+    cpus 1
+
+    input:
+    path bed
+    path bim
+    path fam
+
+    output:
+    path '*.png'
+    path '*.pdf'
+    path '*.txt'
+
+    publishDir "${params.inputDir}/qc_logs", mode: 'move', pattern: '*.txt'
+    publishDir "${params.inputDir}/figures", mode: 'move', pattern: '*.{pdf,png}'
+
+    script:
+    """
+    mkdir -p ${params.inputDir}/${bed.SimpleName}/final/
+    final_pca.R --target_bed ${bed} 
+    """
+}
+
+
+process shuffleSampleOrder {
+    time '6h'
+    memory '1 GB'
+    cpus 1
+
+    input:
+    path bed
+    path bim
+    path fam
+    path sampleFile
+
+    output:
+    path 'shuffled.bed', emit: bed
+    path 'shuffled.bim', emit: bim
+    path 'shuffled.fam', emit: fam
+
+    script:
+    """
+    # 1. Create shuffled sample list
+    create_shuffled_sample_list.R --sample_file ${sampleFile}
+    # 2. Shuffle samples 
+    plink2 --bed ${bed} \
+        --bim ${bim} \
+        --fam ${fam} \
+        --indiv-sort f ShuffledSampleOrder.txt \
+        --make-bed \
+        --out shuffled \
+        --threads 4
+    """
+}
+
 
 workflow {
     concatCHRFiles(params.inputDir)
-    splitMultiAllelicVariants(concatCHRFiles.output.sortedVCF)
-    // filterMultiAllelicVariants(splitMultiAllelicVariants.output)
-    fixGTAnnot(splitMultiAllelicVariants.output)
-    // createGraphs(params.testVCF)
-    filterVariants(fixGTAnnot.output)
-    // getMetrics(fixGTAnnot.output.unfilteredVCF, filterVariants.output.filteredVCF)
-    convertToPlinkFormat(filterVariants.output.filteredVCF)
-    calculateMissingness(convertToPlinkFormat.output, fixGTAnnot.output)
+    fixGTAnnot(concatCHRFiles.output.sortedVcf)
+    splitMultiAllelicVariants(fixGTAnnot.output.gtFixedVcf)
+    // filterMultiAllelicVariants(splitMultiAllelicVariants.output) // optional step
+    // createGraphs(splitMultiAllelicVariants.output.splitVcf) // optional step
+    filterVariants(splitMultiAllelicVariants.output.splitVcf)
+    convertToPlinkFormat(filterVariants.output.filteredVcf)
+    calculateMissingness(convertToPlinkFormat.output, splitMultiAllelicVariants.output.splitVcf)
     createHetFile(convertToPlinkFormat.output)
-    findMissingSamples(calculateMissingness.output.missingFile)
-    filterMissingSamples(findMissingSamples.output.filteredSamplesFile, convertToPlinkFormat.output)
+    findMissingSamples(calculateMissingness.output.missing)
+    filterMissingSamples(findMissingSamples.output.filteredSamples, convertToPlinkFormat.output)
     findHetSamples(createHetFile.output)
     filterHetSamples(findHetSamples.output.failedHetSamples, filterMissingSamples.output)
-    createMetricsFile(filterHetSamples.output)
     filterLowAltFreq(filterHetSamples.output)
     filterRelated(filterLowAltFreq.output)
-    convertBackToVCF(filterRelated.output.bedFile, filterRelated.output.bimFile, filterRelated.output.famFile)
-    runBeagle(convertBackToVCF.output.finalVCF)
-    convertToPlinkFormatAlt(runBeagle.output.beagleVCF)
-    popProject(filterRelated.output.bedFile, filterRelated.output.bimFile, filterRelated.output.famFile)
+    // createMetricsFile(filterHetSamples.output) // mind the folder structure
+    convertBackToVCF(filterRelated.output.bed, filterRelated.output.bim, filterRelated.output.fam)
+    runBeagle(convertBackToVCF.output.finalVcf)
+    convertToPlinkFormatAlt(runBeagle.output.beagleVcf)
+    // popProject(filterRelated.output.bed, filterRelated.output.bim, filterRelated.output.fam)
+    // targetPCA(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam) # Step needs fixing
+    popProjectAfterBeagle(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam)
+    // getVariantAndSampleCount(fixGTAnnot.output.gtFixedVcf, splitMultiAllelicVariants.output.splitVcf, filterVariants.output.filteredVcf, filterMissingSamples.output.bim, filterHetSamples.output.bim, filterLowAltFreq.output.bim, filterRelated.output.bim, targetPCA.output.bim , filterMissingSamples.output.fam, filterHetSamples.output.fam, filterLowAltFreq.output.fam, filterRelated.output.fam, targetPCA.output.fam)
+    getVariantAndSampleCountNoTargetPCA(fixGTAnnot.output.gtFixedVcf, splitMultiAllelicVariants.output.splitVcf, filterVariants.output.filteredVcf, filterMissingSamples.output.bim, filterHetSamples.output.bim, filterLowAltFreq.output.bim, filterRelated.output.bim, filterMissingSamples.output.fam, filterHetSamples.output.fam, filterLowAltFreq.output.fam, filterRelated.output.fam)
+    // finalPCA(convertToPlinkFormatAlt.output.bed, convertToPlinkFormatAlt.output.bim, convertToPlinkFormatAlt.output.fam)  
 }
