@@ -1,4 +1,4 @@
-#!/usr/bin/Rscript
+#!/bin/Rscript
 # Author: Urmo Võsa
 # Edited by Joost Bakker
 

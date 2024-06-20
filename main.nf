@@ -24,8 +24,8 @@ process concatCHRFiles {
     script:
     """
     mkdir -p  tmp_sort
-    bcftools concat ${vcfsPath}/chr*.vcf.gz -Oz -o ${vcfsPath.SimpleName}.concat.vcf.gz
-    bcftools sort ${vcfsPath.SimpleName}.concat.vcf.gz -Oz -o ${vcfsPath.SimpleName}.sorted.concat.vcf.gz --temp-dir ./tmp_sort
+    for i in {1..22}; do echo "${vcfsPath.SimpleName}/chr\$i.vcf.gz" >> vcflist.txt; done
+    bcftools concat -f vcflist.txt -Oz -o ${vcfsPath.SimpleName}.sorted.concat.vcf.gz
     """
 }
 
@@ -72,7 +72,7 @@ process splitMultiAllelicVariants {
 
 
 process filterVariants {
-    publishDir "${params.outDir}/${vcf.SimpleName}/custom_vcf_log", mode: "move", pattern: "*.{log.gz}"
+    publishDir "${params.outDir}/${vcf.SimpleName}/variant_filter", mode: "move", pattern: "*.{log.gz}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -90,7 +90,7 @@ process filterVariants {
     script:
     """
     mkdir -p  ${params.outDir}/${vcf.SimpleName}
-    mkdir -p  ${params.outDir}/${vcf.SimpleName}/custom_vcf_log
+    mkdir -p  ${params.outDir}/${vcf.SimpleName}/variant_filter
     mkdir -p  ${params.outDir}/${vcf.SimpleName}/get_metrics
     mkdir -p ${params.outDir}/${vcf.SimpleName}/missingness
     mkdir -p  ${params.outDir}/${vcf.SimpleName}/het/
@@ -121,7 +121,7 @@ process filterVariants {
 }
 
 process getMetrics {
-    publishDir "${params.outDir}/${filteredVcf.SimpleName}/metrics", mode: "move", pattern: "*.{gz}"
+    publishDir "${params.outDir}/${filteredVcf.SimpleName}/metrics", mode: "move", pattern: "*.{gz,log}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -372,7 +372,7 @@ process filterLowAltFreq {
 }
 
 process filterRelated {
-    publishDir "${params.outDir}/${bed.SimpleName}/related", mode: 'copy', pattern: "*.{txt,pdf,png,log}"
+    publishDir "${params.outDir}/${bed.SimpleName}/final", mode: 'copy', pattern: "*.{txt,pdf,png,log}"
     errorStrategy 'retry'
     maxRetries 1
 
@@ -433,8 +433,11 @@ process popProject {
     output:
     path '*.png'
     path '*.pdf'
-    path '1000G_PC_projections.txt'
-    path 'PopAssignResults.txt'
+    path '*.txt'
+    path bed, emit: bed
+    path bim, emit: bim
+    path fam, emit: fam
+    path 'PopAssignResults.txt', emit: pops
     
     script:
     """
@@ -444,8 +447,35 @@ process popProject {
     """
 }
 
+process popSplit {
+    errorStrategy 'retry'
+    maxRetries 1
+
+    time '4h'
+    memory '24 GB'
+    cpus 4
+
+    input:
+    path bed
+    path bim
+    path fam
+    path assign
+    
+    output:
+    path bed, emit: bed
+    path bim, emit: bim
+    path fam, emit: fam
+    path 'PopAssignResults.txt', emit: pops
+    path 'pops/*', emit: pop_dirs
+    
+    script:
+    """
+    pop.py -i ${assign} -o assigned.txt
+    """
+}
+
 process targetPCA {
-  storeDir "${params.outDir}/${bed.SimpleName}/final" 
+  storeDir "${params.outDir}/${bed.SimpleName}/target/" 
   
 
   time '6h'
@@ -461,11 +491,15 @@ process targetPCA {
   path "${bed.SimpleName}.toImputation.bed", emit: bed
   path "${bed.SimpleName}.toImputation.bim", emit: bim
   path "${bed.SimpleName}.toImputation.fam", emit: fam
-  path "${bed.SimpleName}.SamplesToInclude.txt", emit: sampleFile
+  path "*.txt"
+  path "*.pdf"
+  path "*.png"
+  path "*.log"
+
   
   script:
   """
-  mkdir -p  ${params.outDir}/${bed.SimpleName}/final
+  mkdir -p  ${params.outDir}/${bed.SimpleName}/target
   # 1. Do PCA and find outliers
   target_pca.R --target_bed ${bed} --outlier_threshold ${params.populationOutlierThreshold} --out ${bed.SimpleName}
 
@@ -483,7 +517,7 @@ process targetPCA {
 
 
 process finalSNPandGenotypeQC {
-  publishDir "${params.outDir}/${bed.SimpleName}/final_snp_qc/", mode: 'move'
+  publishDir "${params.outDir}/${bed.SimpleName}/final_snp_qc/", mode: 'move', pattern: "*.{txt,pdf,png,bed,bim,fam,gz,log}"
   
 
   time '6h'
@@ -521,6 +555,30 @@ process finalSNPandGenotypeQC {
   """
 }
 
+process PCA {
+  publishDir "${params.outDir}/${bed.SimpleName}/before_target/", mode: 'move', pattern: "*.{txt,pdf,png}"
+  
+
+  time '6h'
+  memory '16 GB'
+  cpus 1
+
+  input:
+  path bed
+  path bim
+  path fam
+  
+  output:
+  path '*.png'
+  path '*.pdf'
+  path '*.txt'
+  
+  script:
+  """
+  final_pca.R --target_bed ${bed} 
+  """
+}
+
 process finalPCA {
   publishDir "${params.outDir}/${bed.SimpleName}/final/", mode: 'move', pattern: "*.{txt,pdf,png}"
   
@@ -546,40 +604,132 @@ process finalPCA {
   """
 }
 
-process shuffleSampleOrder {
-  publishDir "${params.outDir}/10_shuffle_sample_order/", mode: 'copy', pattern: "*.{txt,pdf,png,log}"
-  
 
+process pop_filter {
+errorStrategy 'ignore'
+publishDir "${params.outDir}/${bed.SimpleName}/", mode: 'copy'
+time '6h'
+memory '8 GB'
+cpus 4
+
+input:
+path bed
+path bim
+path fam
+path pop_dir
+
+output:
+path "target/${pop_dir}/", emit: pop_dir
+// path "${pop_dir.SimpleName}.toImputation.bed", emit: bed
+// path "${pop_dir.SimpleName}.toImputation.bim", emit: bim
+// path "${pop_dir.SimpleName}.toImputation.fam", emit: fam
+
+script:
+"""
+mkdir -p target/${pop_dir}
+plink2 --bfile ${bed.SimpleName} --keep ${pop_dir}/${pop_dir.SimpleName}.txt --make-bed --out ${pop_dir.SimpleName}/${bed.SimpleName}_${pop_dir.SimpleName}
+if [ \$(cat ${pop_dir}/${pop_dir.SimpleName}.txt | wc -l) -gt 29 ]
+then
+    plink2 --bfile ${bed.SimpleName} --keep ${pop_dir}/${pop_dir.SimpleName}.txt --make-bed --out ${pop_dir.SimpleName}/${bed.SimpleName}_${pop_dir.SimpleName}
+
+    # 1. Do PCA and find outliers
+    target_pca.R --target_bed ${pop_dir.SimpleName}/${bed.SimpleName}_${pop_dir.SimpleName}.bed --outlier_threshold ${params.populationOutlierThreshold} --out target/${pop_dir}/${pop_dir.SimpleName}
+
+    # 2. Remove outlier samples
+    plink2 --bed ${bed} \
+        --bim ${bim} \
+        --fam ${fam} \
+        --output-chr 26 \
+        --keep target/${pop_dir}/${pop_dir.SimpleName}.SamplesToInclude.txt \
+        --make-bed \
+        --threads 4 \
+        --out target/${pop_dir}/${pop_dir.SimpleName}.toImputation
+    final_pca.R --target_bed target/${pop_dir}/${pop_dir.SimpleName}.toImputation.bed
+    mv ./*.pdf ./*.png target/${pop_dir}
+
+else
+    mv ${pop_dir.SimpleName}/${bed.SimpleName}_${pop_dir.SimpleName}.bed target/${pop_dir}/${pop_dir.SimpleName}.toImputation.bed
+    mv ${pop_dir.SimpleName}/${bed.SimpleName}_${pop_dir.SimpleName}.bim target/${pop_dir}/${pop_dir.SimpleName}.toImputation.bim
+    mv ${pop_dir.SimpleName}/${bed.SimpleName}_${pop_dir.SimpleName}.fam target/${pop_dir}/${pop_dir.SimpleName}.toImputation.fam
+fi
+"""
+}
+
+process pop_merge {
+  publishDir "${params.outDir}/${proj_bed.SimpleName}/final", mode: "move", pattern: "*.{txt,pdf,png,bed,bim,fam,gz,log}"
   time '6h'
-  memory '1 GB'
+  memory '16 GB'
   cpus 1
 
   input:
-  path bed
-  path bim
-  path fam
-  path sampleFile
+  path pop_dirs
+  path proj_bed
   
   output:
-  path 'shuffled.bed', emit: bed
-  path 'shuffled.bim', emit: bim
-  path 'shuffled.fam', emit: fam
+  path "merged.vcf.gz"
+  path "merged.bed"
+  path "merged.bim"
+  path "merged.fam"
+  path "*.pdf"
+  path "*.txt"
+  path "*.png"
   
   script:
   """
-  # 1. Create shuffled sample list
-  create_shuffled_sample_list.R --sample_file ${sampleFile}
-
-  # 2. Shuffle samples 
-  plink2 --bed ${bed} \
-    --bim ${bim} \
-    --fam ${fam} \
-    --indiv-sort f ShuffledSampleOrder.txt \
-    --make-bed \
-    --out shuffled \
-    --threads 4
+  for pop in ${pop_dirs}
+  do
+    plink2 --bfile \$pop/\$pop.toImputation --export vcf bgz --out \$pop
+    tabix \$pop.vcf.gz
+  done
+  bcftools merge ./*.vcf.gz -Oz -o merged.vcf.gz
+  plink2 --vcf merged.vcf.gz --make-bed --out merged
+  final_pca.R --target_bed merged.bed
   """
 }
+
+process beagle {
+    storeDir "${params.outDir}/${vcf.SimpleName}/final"
+    errorStrategy 'retry'
+    maxRetries 2
+
+    time '8h'
+    memory '20 GB'
+    cpus 1
+
+    input:
+    path bed
+    path bim
+    path fam
+
+    output:
+    path "${bed.SimpleName}.beagle.bed", emit: beagleVcf
+    path "${bed.SimpleName}.beagle.bim"
+    path "${bed.SimpleName}.beagle.fam"
+    path "${vcfFile.SimpleName}.beagle.log"
+
+    script:
+    """
+    plink2 --bfile ${bed.SimpleName} --export vcf bgz --out ${bed.SimpleName}
+    java -Xmx18g -jar ${params.beagleJarDir} \
+    gtgl=${bed.SimpleName}.vcf.gz \
+    out=${vcfFile.SimpleName}.beagle \
+    map=${params.mapFile} \
+    gprobs=true
+    plink2 --vcf ${bed.SimpleName}.vcf.gz --make-bed --out ${bed.SimpleName}.beagle
+    """
+}
+
+//   for dir in ${pop_dirs}
+//   do
+//     sort -k1,1 -k2,2n \$dir/\$dir.toImputation.bed > \$dir/\$dir.toImputation.sorted.bed
+//     bedtools merge 
+//     plink2 --bfile \$dir/\$dir.toImputation --set-all-var-ids '@:#:\$r:\$a' --new-id-max-allele-len 1000 --make-bed --out \$dir/\$dir.toImputation 
+//   done
+
+//   bedtools merge
+//   for dir in ${pop_dirs}; do plink2 --bed \$dir/\$dir.toImputation.bed --bim \$dir/\$dir.toImputation.bim --fam \$dir/\$dir.toImputation.fam --set-all-var-ids '@:#:\$r:\$a' --new-id-max-allele-len 1000 --make-bed --out \$dir/\$dir.toImputation; done
+//   for dir in ${pop_dirs}; do echo "\$dir/\$dir.toImputation.bed \$dir/\$dir.toImputation.bim \$dir/\$dir.toImputation.fam" >> bfile_list.txt; done
+//   plink2 --pmerge-list bfile_list.txt --out pop_pc_filtered --make-bed
 
 workflow {
     concatCHRFiles(params.inputDir)
@@ -597,7 +747,8 @@ workflow {
     // createMetricsFile(filterHetSamples.output)
     filterLowAltFreq(filterHetSamples.output)
     filterRelated(filterLowAltFreq.output)
-    popProject(filterRelated.output.bed, filterRelated.output.bim, filterRelated.output.fam)
-    targetPCA(filterRelated.out.bed, filterRelated.out.bim, filterRelated.out.fam)
-    finalPCA(targetPCA.out.bed, targetPCA.out.bim, targetPCA.out.fam)  
+    beagle(filterRelated.output.bed, filterRelated.output.bim, filterRelated.output.fam)
+    popProject(beagle.output.bed, beagle.output.bim, beagle.output.fam)
+    // targetPCA(filterRelated.out.bed, filterRelated.out.bim, filterRelated.out.fam)
+    finalPCA(beagle.out.bed, beagle.out.bim, beagle.out.fam)  
 }
